@@ -12,19 +12,78 @@ from bot import send_news_to_admin
 # Парсинг полного текста статьи
 def get_full_article(url: str) -> str:
     try:
-        response = requests.get(url, timeout=10)
+        print(f"🔍 Парсим статью: {url}")
+
+        # Добавляем заголовки чтобы избежать блокировки
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+
+        response = requests.get(url, timeout=10, headers=headers)
         response.encoding = response.apparent_encoding
         soup = BeautifulSoup(response.text, "html.parser")
 
-        article = soup.find("article") or soup.find("div", class_="article") or soup.find("div", class_="content")
+        # Расширенный список селекторов для поиска контента
+        selectors = [
+            "article",
+            "div.article",
+            "div.content",
+            "div.post-content",
+            "div.entry-content",
+            "div.story-text",
+            "div.text",
+            "main",
+            "[role='main']",
+            "div.news-text",
+            "div.news-content",
+            "div.news-detail",
+            "div.detail-text",
+            ".news__text",
+            ".article__text",
+            ".content__text",
+            "div.news-body",
+            "div.article-body"
+        ]
+
+        article = None
+        for selector in selectors:
+            found = soup.select(selector)
+            if found:
+                article = found[0]
+                print(f"✅ Найден контент по селектору: {selector}")
+                break
+
+        # Если не нашли по селекторам, ищем по структуре
+        if not article:
+            # Ищем самый большой текстовый блок
+            text_blocks = soup.find_all(['div', 'section'])
+            text_blocks = [block for block in text_blocks if len(block.get_text(strip=True)) > 200]
+            if text_blocks:
+                article = max(text_blocks, key=lambda x: len(x.get_text(strip=True)))
+                print("✅ Найден контент по размеру текстового блока")
+
         if article:
-            paragraphs = [p.get_text() for p in article.find_all("p")]
+            # Удаляем ненужные элементы
+            for element in article.find_all(['script', 'style', 'nav', 'header', 'footer', 'aside', 'form', 'iframe']):
+                element.decompose()
+
+            paragraphs = [p.get_text().strip() for p in article.find_all("p")]
+            # Фильтруем пустые и слишком короткие параграфы
+            paragraphs = [p for p in paragraphs if len(p) > 30]
             text = "\n\n".join(paragraphs).strip()
-            return text
+
+            if text:
+                print(f"✅ Успешно извлечен текст: {len(text)} символов, {len(text.split())} слов")
+                return text
+            else:
+                print("❌ Текст извлечен, но пустой после фильтрации")
+                return ""
         else:
+            print("❌ Контент не найден на странице")
             return ""
+
     except Exception as e:
-        print("Ошибка парсинга:", e)
+        print(f"❌ Ошибка парсинга {url}: {e}")
         return ""
 
 
@@ -45,8 +104,56 @@ def limit_words(text: str, max_words: int = 180) -> str:
     return " ".join(words[:max_words]) + "…"
 
 
+# Функция для сравнения текстов до и после обработки
+def print_text_comparison(original_title: str, original_body: str, processed_text: str):
+    print("\n" + "=" * 80)
+    print("📋 СРАВНЕНИЕ ТЕКСТОВ:")
+    print("=" * 80)
+
+    print("\n🔹 ИСХОДНЫЙ ЗАГОЛОВОК:")
+    print("-" * 40)
+    print(original_title)
+
+    print("\n🔹 ИСХОДНЫЙ ТЕКСТ:")
+    print("-" * 40)
+    if original_body and len(original_body.strip()) > 0:
+        print(original_body[:500] + "..." if len(original_body) > 500 else original_body)
+        print(f"(Длина: {len(original_body)} символов, {len(original_body.split())} слов)")
+    else:
+        print("❌ Текст отсутствует")
+        print("(Длина: 0 символов, 0 слов)")
+
+    print("\n🔹 ОБРАБОТАННЫЙ ТЕКСТ (DeepSeek):")
+    print("-" * 40)
+    print(processed_text)
+    print(f"(Длина: {len(processed_text)} символов, {len(processed_text.split())} слов)")
+
+    print("\n🔹 СТАТИСТИКА:")
+    print("-" * 40)
+    original_words = len(original_body.split()) if original_body and len(original_body.strip()) > 0 else 0
+    processed_words = len(processed_text.split())
+
+    print(f"Сокращение текста: {original_words} → {processed_words} слов")
+
+    if original_words > 0:
+        reduction_percent = ((original_words - processed_words) / original_words * 100)
+        print(f"Сокращение: {reduction_percent:.1f}%")
+    else:
+        print("Сокращение: невозможно вычислить (исходный текст пустой)")
+
+    print("=" * 80 + "\n")
+
+
+
 # ДИПСИК
 def paraphrase_with_deepseek(title: str, body: str) -> str:
+    # Если текст слишком короткий, не используем DeepSeek
+    if not body or len(body.strip()) < 80:  # Увеличили порог с 50 до 80
+        print(f"⚠️ Текст слишком короткий ({len(body)} символов), используем заголовок")
+        result = title
+        print_text_comparison(title, body, result)
+        return result
+
     try:
         prompt = f"""
         Ты — профессиональный редактор новостного портала. 
@@ -90,22 +197,53 @@ def paraphrase_with_deepseek(title: str, body: str) -> str:
             message = data["choices"][0].get("message", {})
             text = message.get("content", "")
             text = clean_text(text)
-            return limit_words(text, 180)
+            processed_text = limit_words(text, 180)
+
+            # Выводим сравнение текстов
+            print_text_comparison(title, body, processed_text)
+
+            return processed_text
         else:
             print("DeepSeek ERROR:", data)
-            return limit_words(clean_text(f"{title}\n\n{body}"), 180)
+            fallback_text = limit_words(clean_text(f"{title}\n\n{body}"), 180)
+            print_text_comparison(title, body, fallback_text)
+            return fallback_text
     except Exception as e:
-        print("Ошибка DeepSeek:", e)
-        return limit_words(clean_text(f"{title}\n\n{body}"), 180)
+        print(f"❌ Ошибка DeepSeek: {e}")
+        fallback_text = title  # Используем только заголовок при ошибке
+        print_text_comparison(title, body, fallback_text)
+        return fallback_text
 
 
 # Обработка новости
 async def process_entry(entry):
     title = getattr(entry, "title", "Без названия")
     link = getattr(entry, "link", "")
-    body = get_full_article(link)
-    if not body:
-        body = getattr(entry, "summary", getattr(entry, "description", ""))
+
+    print(f"\n🎯 Обрабатываем новость: {title}")
+    print(f"🔗 Ссылка: {link}")
+
+    # Сначала получаем описание из RSS (часто там есть краткий текст)
+    rss_description = getattr(entry, "summary", getattr(entry, "description", ""))
+    if rss_description:
+        # Очищаем HTML из описания
+        rss_description = clean_text(rss_description)
+        print(f"📝 RSS описание: {len(rss_description)} символов")
+
+    # Потом пытаемся получить полный текст статьи
+    full_article = get_full_article(link)
+
+    # Выбираем лучший источник текста
+    if full_article and len(full_article) > 100:
+        body = full_article
+        print("✅ Используем полный текст статьи")
+    elif rss_description and len(rss_description) > 50:
+        body = rss_description
+        print("✅ Используем текст из RSS описания")
+    else:
+        body = ""
+        print("❌ Текст не найден ни в статье, ни в RSS")
+
     return paraphrase_with_deepseek(title, body)
 
 
