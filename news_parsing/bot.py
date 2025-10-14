@@ -18,39 +18,46 @@ pending_news = {}
 
 # Отправка новости админам
 async def send_news_to_admin(news_text: str, source_url: str):
-    image_files = os.listdir("images")
-    image_path = os.path.join("images", random.choice(image_files))
-    news_id = hashlib.md5(source_url.encode()).hexdigest()
-    pending_news[news_id] = {"url": source_url, "image": image_path, "text": news_text}
+    try:
+        image_files = os.listdir("images")
+        if not image_files:
+            print("❌ Нет изображений в папке images")
+            return
 
-    keyboard = InlineKeyboardBuilder()
-    keyboard.button(text="🌐 На сайт", callback_data=f"site|{news_id}")
-    keyboard.button(text="✅ В Telegram", callback_data=f"approve|{news_id}")
-    keyboard.button(text="🚀 Оба", callback_data=f"both|{news_id}")
-    keyboard.button(text="❌ Отклонить", callback_data=f"reject|{news_id}")
+        image_path = os.path.join("images", random.choice(image_files))
+        news_id = hashlib.md5(source_url.encode()).hexdigest()
+        pending_news[news_id] = {"url": source_url, "image": image_path, "text": news_text}
 
-    photo = FSInputFile(image_path)
+        keyboard = InlineKeyboardBuilder()
+        keyboard.button(text="🌐 На сайт", callback_data=f"site|{news_id}")
+        keyboard.button(text="✅ В Telegram", callback_data=f"approve|{news_id}")
+        keyboard.button(text="🚀 Оба", callback_data=f"both|{news_id}")
+        keyboard.button(text="❌ Отклонить", callback_data=f"reject|{news_id}")
 
-    # текст для админов: новость + ссылка
-    admin_caption = f"{news_text}\n\nИсточник: {source_url}"
+        photo = FSInputFile(image_path)
+        admin_caption = f"{news_text}\n\nИсточник: {source_url}"
 
-    for admin_id in ADMINS:
-        try:
-            if len(admin_caption) <= 1024:
-                await bot.send_photo(
-                    admin_id,
-                    photo,
-                    caption=admin_caption,
-                    parse_mode="HTML",
-                    reply_markup=keyboard.as_markup()
-                )
-            else:
-                # фото без подписи
-                await bot.send_photo(admin_id, photo, reply_markup=keyboard.as_markup())
-                # потом длинный текст отдельным сообщением
-                await bot.send_message(admin_id, admin_caption, parse_mode="HTML")
-        except TelegramForbiddenError:
-            print(f"❌ Не удалось отправить админу {admin_id} — он не написал боту.")
+        for admin_id in ADMINS:
+            try:
+                if len(admin_caption) <= 1024:
+                    await bot.send_photo(
+                        admin_id,
+                        photo,
+                        caption=admin_caption,
+                        parse_mode="HTML",
+                        reply_markup=keyboard.as_markup()
+                    )
+                else:
+                    await bot.send_photo(admin_id, photo, reply_markup=keyboard.as_markup())
+                    await bot.send_message(admin_id, admin_caption, parse_mode="HTML")
+                print(f"✅ Новость отправлена админу {admin_id}")
+            except TelegramForbiddenError:
+                print(f"❌ Не удалось отправить админу {admin_id} — он не написал боту.")
+            except Exception as e:
+                print(f"❌ Ошибка отправки админу {admin_id}: {e}")
+
+    except Exception as e:
+        print(f"❌ Критическая ошибка в send_news_to_admin: {e}")
 
 # Подтверждение новости
 @dp.callback_query(F.data.startswith("approve|"))

@@ -1,27 +1,38 @@
 import asyncio
+
+import site_poster
 from bot import dp, bot
 from parser import scheduler
 import logging
+import signal
+import sys
 
 async def main():
     print("🤖 Бот запускается...")
+
+    # Настройка логирования
     logging.basicConfig(level=logging.INFO)
+    site_poster.find_correct_form_endpoint()
     # Запускаем фоновую задачу парсера
-    from site_poster import analyze_create_form, check_required_fields,analyze_real_form_fields,test_form_manually, debug_form_submission
-    analyze_create_form()
-    check_required_fields()
-    analyze_real_form_fields()
-    test_form_manually()
-    debug_form_submission()
-    asyncio.create_task(scheduler())
+    parser_task = asyncio.create_task(scheduler())
 
-    while True:
+    # Запускаем бота
+    try:
+        await dp.start_polling(bot, handle_signals=False)
+    except Exception as e:
+        print(f"❌ Ошибка бота: {e}")
+    finally:
+        # Корректно останавливаем задачи
+        parser_task.cancel()
         try:
-            await dp.start_polling(bot)
-        except Exception as e:
-            print("⚠️ Ошибка polling:", e)
-            await asyncio.sleep(10)
-
+            await parser_task
+        except asyncio.CancelledError:
+            pass
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("👋 Бот остановлен")
+    except Exception as e:
+        print(f"❌ Критическая ошибка: {e}")

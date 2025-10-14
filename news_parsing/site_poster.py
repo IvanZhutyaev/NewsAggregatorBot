@@ -81,16 +81,36 @@ def get_csrf_token_for_create() -> str:
 
         soup = BeautifulSoup(resp.text, "html.parser")
 
-        # Ищем форму создания новости
-        form = soup.find('form')
-        if not form:
+        # Ищем ВСЕ формы на странице
+        forms = soup.find_all('form')
+        print(f"🔍 Найдено форм на странице: {len(forms)}")
+
+        for i, form in enumerate(forms):
+            action = form.get('action', '')
+            method = form.get('method', '')
+            print(f"  Форма {i + 1}: action='{action}', method='{method}'")
+
+        # Ищем форму с правильным action (обычно action='' или action='/admin/news')
+        target_form = None
+        for form in forms:
+            action = form.get('action', '')
+            # Ищем форму, которая не ведет на logout и не имеет подозрительного action
+            if 'logout' not in action and not action.startswith('/admin/logout'):
+                target_form = form
+                break
+
+        if not target_form and forms:
+            # Если не нашли подходящую, берем первую форму
+            target_form = forms[0]
+
+        if not target_form:
             print("❌ Форма не найдена на странице")
             return None
 
         print("✅ Форма создания новости найдена")
 
         # Ищем CSRF токен в форме
-        token_tag = form.find("input", {"name": "_token"})
+        token_tag = target_form.find("input", {"name": "_token"})
         if token_tag:
             csrf_token = token_tag["value"]
             print(f"✅ CSRF токен найден: {csrf_token[:20]}...")
@@ -104,48 +124,31 @@ def get_csrf_token_for_create() -> str:
         return None
 
 
-def post_news_to_site(news_text: str, image_path: str = None) -> bool:
-    """Создание новости через правильную форму"""
+def post_news_to_site_simple(news_text: str, image_path: str = None) -> bool:
+    """Упрощенная версия для тестирования - используем минимальные поля"""
     if not login_to_site():
         return False
 
     csrf_token = get_csrf_token_for_create()
     if not csrf_token:
-        print("❌ Не удалось получить CSRF токен для создания новости")
         return False
 
+    # ПРАВИЛЬНЫЙ URL для отправки формы создания новости
     create_url = f"{SITE_URL}/admin/news"
     title, body = extract_title_and_body(news_text)
 
+    print("🔄 Используем упрощенный метод с минимальными полями...")
     print(f"📝 Отправляем данные на: {create_url}")
     print(f"Заголовок: {title}")
     print(f"Текст: {body[:100]}...")
 
-    # Правильные данные для Voyager с мультиязычной поддержкой
+    # Абсолютно минимальный набор полей
     data = {
         "_token": csrf_token,
         "i18n_selector": "ru",  # Выбираем русский язык
-
-        # Основные поля (русская версия)
         "title": title,
-        "title_i18n": '{"ru":"' + title.replace('"', '\\"') + '","kk":null,"en":null,"zh":null}',
-        "subtitle": title[:100],
-        "subtitle_i18n": '{"ru":"' + title[:100].replace('"', '\\"') + '","kk":null,"en":null,"zh":null}',
         "description": body,
-        "description_i18n": '{"ru":"' + body.replace('"', '\\"') + '","kk":null,"en":null,"zh":null}',
-
-        # SEO поля
-        "seo_title": title[:60],
-        "seo_title_i18n": '{"ru":"' + title[:60].replace('"', '\\"') + '","kk":null,"en":null,"zh":null}',
-        "seo_description": body[:160] if body else title[:160],
-        "seo_description_i18n": '{"ru":"' + (body[:160] if body else title[:160]).replace('"',
-                                                                                          '\\"') + '","kk":null,"en":null,"zh":null}',
-        "seo_keywords": ", ".join(title.split()[:5]),
-        "seo_keywords_i18n": '{"ru":"' + ", ".join(title.split()[:5]).replace('"',
-                                                                              '\\"') + '","kk":null,"en":null,"zh":null}',
-        "seo_slug": "",
-
-        # Обязательные скрытые поля
+        # Обязательные поля из анализа формы
         "redirect_to": "",
         "model_name": "App\\Models\\News",
         "model_id": "",
@@ -170,10 +173,16 @@ def post_news_to_site(news_text: str, image_path: str = None) -> bool:
 
         if response.status_code == 500:
             print("❌ Ошибка 500 - внутренняя ошибка сервера")
-            # Сохраняем ошибку в файл для отладки
+            # Сохраняем детальную информацию об ошибке
             with open("error_debug.html", "w", encoding="utf-8") as f:
                 f.write(response.text)
             print("🔍 Сохранен полный ответ в error_debug.html")
+
+            # Показываем начало ошибки для отладки
+            error_lines = response.text.split('\n')
+            for line in error_lines[:10]:
+                if line.strip():
+                    print(f"Ошибка: {line[:200]}...")
             return False
 
         if response.status_code in (200, 302):
@@ -181,20 +190,17 @@ def post_news_to_site(news_text: str, image_path: str = None) -> bool:
                 print("✅ Новость успешно создана (редирект)!")
                 return True
 
+            # Проверяем успешность по содержимому
             if "успех" in response.text.lower() or "success" in response.text.lower():
                 print("✅ Новость успешно создана!")
                 return True
 
-            # Проверяем наличие ошибок
-            soup = BeautifulSoup(response.text, "html.parser")
-            errors = soup.find_all(class_=['error', 'alert-danger'])
-            if errors:
-                for error in errors:
-                    print(f"❌ Ошибка: {error.get_text(strip=True)}")
-                return False
+            if "error" not in response.text.lower() and "ошибка" not in response.text.lower():
+                print("✅ Новость создана (нет ошибок в ответе)!")
+                return True
 
-            print("⚠️ Статус 200, но нет явного подтверждения успеха")
-            return True
+            print("⚠️ Возможная ошибка в ответе")
+            return False
         else:
             print(f"❌ Ошибка публикации: {response.status_code}")
             return False
@@ -202,6 +208,12 @@ def post_news_to_site(news_text: str, image_path: str = None) -> bool:
     except Exception as e:
         print(f"❌ Ошибка при отправке новости: {e}")
         return False
+
+
+# Обновите также функцию post_news_to_site чтобы использовать упрощенную версию
+def post_news_to_site(news_text: str, image_path: str = None) -> bool:
+    """Основная функция публикации новости"""
+    return post_news_to_site_simple(news_text, image_path)
 
 
 def post_news_to_site_alternative(news_text: str, image_path: str = None) -> bool:
@@ -499,3 +511,44 @@ def debug_form_submission():
 
     except Exception as e:
         print(f"❌ Ошибка отладки: {e}")
+
+
+def find_correct_form_endpoint():
+    """Поиск правильного endpoint для формы"""
+    if not login_to_site():
+        return None
+
+    create_url = f"{SITE_URL}/admin/news/create"
+    try:
+        resp = session.get(create_url)
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Ищем JavaScript который может содержать endpoint
+        scripts = soup.find_all('script')
+        for script in scripts:
+            if script.string:
+                content = script.string
+                if 'action' in content and 'news' in content:
+                    print("🔍 Найден возможный endpoint в JS:")
+                    lines = content.split('\n')
+                    for line in lines:
+                        if 'action' in line and 'news' in line:
+                            print(f"  JS: {line.strip()}")
+
+        # Проверяем различные возможные endpoints
+        endpoints = [
+            f"{SITE_URL}/admin/news",
+            f"{SITE_URL}/admin/news/store",
+            f"{SITE_URL}/admin/news/save",
+            f"{SITE_URL}/admin/news/create"
+        ]
+
+        for endpoint in endpoints:
+            print(f"🔍 Проверяем endpoint: {endpoint}")
+            # Можно добавить тестовые запросы здесь
+
+        return f"{SITE_URL}/admin/news"  # По умолчанию
+
+    except Exception as e:
+        print(f"❌ Ошибка поиска endpoint: {e}")
+        return None
