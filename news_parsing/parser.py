@@ -5,7 +5,7 @@ import re
 import html
 from bs4 import BeautifulSoup
 from config import DEEPSEEK_KEY
-from database import get_sites, is_news_sent
+from database import get_sites, is_news_sent, is_news_published, mark_news_sent
 from bot import send_news_to_admin
 
 
@@ -254,9 +254,11 @@ async def parse_feed_and_process(url: str, limit: int = 5) -> int:
 
     for entry in feed.entries[:limit]:
         link = getattr(entry, "link", "")
-        if not await is_news_sent(link):
+        # Проверяем не опубликована ли новость, а не отправлена ли на модерацию
+        if not await is_news_published(link):  # Изменено здесь
             news_text = await process_entry(entry)
             await send_news_to_admin(news_text, link)
+            await mark_news_sent(link)  # Отмечаем как отправленную на модерацию
             processed_count += 1
             await asyncio.sleep(1)
 

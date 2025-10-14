@@ -132,7 +132,7 @@ def get_csrf_token_for_create() -> str:
 
 
 def post_news_to_site_simple(news_text: str, image_path: str = None) -> bool:
-    """Исправленная версия с оптимизированной длиной полей"""
+    """Исправленная версия с правильной загрузкой изображений"""
     if not login_to_site():
         return False
 
@@ -147,23 +147,14 @@ def post_news_to_site_simple(news_text: str, image_path: str = None) -> bool:
     print(f"📝 Отправляем данные на: {create_url}")
 
     # ОПТИМАЛЬНЫЕ ДЛИНЫ ДЛЯ ПОЛЕЙ VOYAGER:
-    # - Заголовок: 60-80 символов (обычно ограничение 255)
-    title = title[:80]  # Безопасное ограничение
-
-    # - Подзаголовок: 120-150 символов (чтобы избежать обрезки)
+    title = title[:80]
     subtitle = body[:120].strip()
     if len(body) > 120:
         subtitle += "..."
-
-    # - SEO заголовок: 50-60 символов (рекомендации Google)
-    seo_title = title[:55]  # Google показывает ~50-60 символов
-
-    # - SEO описание: 150-160 символов (рекомендации Google)
+    seo_title = title[:55]
     seo_description = body[:155].strip()
     if len(body) > 155:
         seo_description += "..."
-
-    # - SEO ключевые слова: до 255 символов
     seo_keywords = "агро, сельское хозяйство, АПК, новости сельского хозяйства"
 
     print(f"📊 Оптимизированные длины полей:")
@@ -193,10 +184,8 @@ def post_news_to_site_simple(news_text: str, image_path: str = None) -> bool:
         "seo_description": seo_description,
         "seo_keywords": seo_keywords,
 
-        # Дополнительные поля, которые могут быть нужны
+        # Дополнительные поля
         "status": "PUBLISHED",
-        "category_id": "",  # Можно указать ID категории если нужно
-        "author_id": "",  # Можно указать ID автора если нужно
         "published_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
 
         # Системные поля
@@ -209,15 +198,22 @@ def post_news_to_site_simple(news_text: str, image_path: str = None) -> bool:
     files = {}
     if image_path and os.path.exists(image_path):
         try:
-            print("🖼️ Загружаем изображения:")
+            print("🖼️ Загружаем изображения с правильными именами:")
 
-            # Основное изображение
-            files["image"] = open(image_path, "rb")
-            print("  ✅ image")
+            # Пробуем разные варианты имен файлов
+            image_filename = os.path.basename(image_path)
 
-            # SEO изображение
-            files["seo_image"] = open(image_path, "rb")
-            print("  ✅ seo_image")
+            # Вариант 1: Основное изображение
+            files["image"] = (image_filename, open(image_path, "rb"), 'image/jpeg')
+            print(f"  ✅ image как '{image_filename}'")
+
+            # Вариант 2: SEO изображение
+            files["seo_image"] = (f"seo_{image_filename}", open(image_path, "rb"), 'image/jpeg')
+            print(f"  ✅ seo_image как 'seo_{image_filename}'")
+
+            # Вариант 3: image_uri (может быть нужно)
+            files["image_uri"] = (f"uri_{image_filename}", open(image_path, "rb"), 'image/jpeg')
+            print(f"  ✅ image_uri как 'uri_{image_filename}'")
 
         except Exception as e:
             print(f"⚠️ Не удалось открыть изображение: {e}")
@@ -225,23 +221,35 @@ def post_news_to_site_simple(news_text: str, image_path: str = None) -> bool:
         print("⚠️ Изображение не найдено или путь не указан")
 
     try:
+        print("📤 Отправляем запрос с файлами...")
         response = session.post(create_url, data=data, files=files, timeout=30)
 
         # Закрываем файлы
         for file_obj in files.values():
-            file_obj.close()
+            if hasattr(file_obj[1], 'close'):
+                file_obj[1].close()
 
         print(f"📡 Ответ сервера: {response.status_code}")
 
         if response.status_code == 500:
             print("❌ Ошибка 500 - внутренняя ошибка сервера")
+
+            # Сохраняем ошибку для анализа
+            error_content = response.text
+            with open("error_image_upload.html", "w", encoding="utf-8") as f:
+                f.write(error_content)
+            print("🔍 Детали ошибки сохранены в error_image_upload.html")
+
             return False
 
         if response.status_code in (200, 302):
             if response.status_code == 302:
                 location = response.headers.get('Location', '')
                 if 'admin/news' in location or 'success' in location.lower():
-                    print("✅ Новость успешно создана!")
+                    print("✅ Новость успешно создана (редирект на список новостей)!")
+                    return True
+                else:
+                    print(f"⚠️ Редирект на: {location}")
                     return True
 
             # Проверяем успешность по содержимому
@@ -876,3 +884,106 @@ def analyze_field_limits():
 
     except Exception as e:
         print(f"❌ Ошибка анализа ограничений: {e}")
+
+
+def test_image_upload_only():
+    """Тестирует только загрузку изображений"""
+    if not login_to_site():
+        return False
+
+    csrf_token = get_csrf_token_for_create()
+    if not csrf_token:
+        return False
+
+    create_url = f"{SITE_URL}/admin/news"
+
+    # Минимальные данные
+    data = {
+        "_token": csrf_token,
+        "i18n_selector": "ru",
+        "title_i18n": json.dumps({"ru": "Тест загрузки изображения", "kk": "", "en": "", "zh": ""}),
+        "description_i18n": json.dumps({"ru": "Это тест загрузки изображения", "kk": "", "en": "", "zh": ""}),
+        "title": "Тест загрузки изображения",
+        "description": "Это тест загрузки изображения",
+        "status": "PUBLISHED",
+    }
+
+    files = {}
+    image_path = "images/Copilot_20251006_074844.png"  # Используйте существующее изображение
+
+    if os.path.exists(image_path):
+        try:
+            print("🧪 Тестируем загрузку изображений...")
+
+            # Тестируем разные варианты
+            image_filename = os.path.basename(image_path)
+
+            # Вариант 1: Просто файл
+            files["image"] = open(image_path, "rb")
+            print("  ✅ image (простой файл)")
+
+            # Вариант 2: С именем файла
+            files["seo_image"] = (image_filename, open(image_path, "rb"))
+            print(f"  ✅ seo_image (с именем '{image_filename}')")
+
+        except Exception as e:
+            print(f"❌ Ошибка открытия изображения: {e}")
+            return False
+
+    try:
+        response = session.post(create_url, data=data, files=files, timeout=30)
+
+        # Закрываем файлы
+        for file_obj in files.values():
+            if hasattr(file_obj, 'close'):
+                file_obj.close()
+
+        print(f"📡 Ответ теста изображений: {response.status_code}")
+
+        if response.status_code in (200, 302):
+            print("✅ Тест изображений пройден!")
+            return True
+        else:
+            print("❌ Тест изображений не пройден")
+            return False
+
+    except Exception as e:
+        print(f"❌ Ошибка теста изображений: {e}")
+        return False
+
+
+def analyze_image_processing():
+    """Анализирует как Voyager обрабатывает изображения"""
+    if not login_to_site():
+        return
+
+    # Создаем тестовую новость и смотрим на результат
+    create_url = f"{SITE_URL}/admin/news"
+
+    try:
+        # Получаем страницу для анализа полей
+        resp = session.get(f"{SITE_URL}/admin/news/create")
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        print("🔍 Анализ обработки изображений Voyager:")
+        print("=" * 50)
+
+        # Ищем JavaScript связанный с изображениями
+        scripts = soup.find_all('script')
+        for script in scripts:
+            if script.string and 'image' in script.string.lower():
+                lines = script.string.split('\n')
+                for line in lines[:10]:  # Первые 10 строк
+                    if any(keyword in line.lower() for keyword in ['image', 'upload', 'file']):
+                        print(f"  JS: {line.strip()}")
+
+        # Ищем информацию о загрузчике файлов
+        file_uploads = soup.find_all(['input', 'div', 'span'],
+                                     attrs={'class': lambda x: x and 'upload' in x.lower() if x else False})
+        print(f"📋 Элементы загрузки: {len(file_uploads)}")
+
+        for elem in file_uploads:
+            print(f"  - {elem.name} class='{elem.get('class', '')}'")
+
+    except Exception as e:
+        print(f"❌ Ошибка анализа: {e}")

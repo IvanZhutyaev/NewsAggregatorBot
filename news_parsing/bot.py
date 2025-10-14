@@ -90,8 +90,6 @@ async def approve_news(callback: types.CallbackQuery):
         return
 
     photo = FSInputFile(image_path)
-
-    # Полный текст
     caption = news_text
 
     try:
@@ -101,7 +99,9 @@ async def approve_news(callback: types.CallbackQuery):
         await callback.message.answer("❌ Не удалось отправить новость в канал.")
         return
 
-    await mark_news_sent(data["url"])
+    # Отмечаем как опубликованную, а не просто как отправленную
+    from database import mark_news_published
+    await mark_news_published(data["url"])  # Изменено здесь
     pending_news.pop(news_id, None)
 
     try:
@@ -109,7 +109,6 @@ async def approve_news(callback: types.CallbackQuery):
     except Exception:
         pass
 
-    # уведомляем админов
     for admin_id in ADMINS:
         try:
             await bot.send_message(admin_id, "✅ Новость опубликована.")
@@ -129,7 +128,9 @@ async def post_to_site(callback: types.CallbackQuery):
 
         success = post_news_to_site(data["text"], data["image"])
         if success:
-            await mark_news_sent(data["url"])
+            # Отмечаем как опубликованную
+            from database import mark_news_published
+            await mark_news_published(data["url"])  # Изменено здесь
             pending_news.pop(news_id, None)
             await callback.message.answer("🌐 Новость опубликована на сайте!")
         else:
@@ -137,6 +138,7 @@ async def post_to_site(callback: types.CallbackQuery):
     except Exception as e:
         print(f"❌ Ошибка в post_to_site: {e}")
         await callback.message.answer("❌ Произошла ошибка при публикации на сайте.")
+
 
 @dp.callback_query(F.data.startswith("both|"))
 async def post_to_both(callback: types.CallbackQuery):
@@ -164,10 +166,18 @@ async def post_to_both(callback: types.CallbackQuery):
             success_tg = False
 
         # Результат
-        if success_site and success_tg:
-            await mark_news_sent(data["url"])
+        if success_site or success_tg:  # Если хотя бы одна публикация успешна
+            # Отмечаем как опубликованную
+            from database import mark_news_published
+            await mark_news_published(data["url"])  # Изменено здесь
             pending_news.pop(news_id, None)
-            await callback.message.answer("🚀 Новость опубликована в Telegram и на сайте!")
+
+            if success_site and success_tg:
+                await callback.message.answer("🚀 Новость опубликована в Telegram и на сайте!")
+            elif success_site:
+                await callback.message.answer("🌐 Новость опубликована на сайте (Telegram не удалось)!")
+            else:
+                await callback.message.answer("✅ Новость опубликована в Telegram (сайт не удалось)!")
         else:
             await callback.message.answer("⚠️ Ошибка при публикации (проверь лог).")
     except Exception as e:
