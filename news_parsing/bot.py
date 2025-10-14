@@ -9,7 +9,7 @@ from aiogram.exceptions import TelegramForbiddenError
 from aiogram.types import FSInputFile
 from config import BOT_TOKEN, CHANNEL_ID, ADMINS
 from database import init_db, add_site, remove_site, get_sites, is_news_sent, mark_news_sent
-from site import post_news_to_site
+from site_poster import post_news_to_site
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
