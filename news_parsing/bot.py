@@ -9,7 +9,7 @@ from aiogram.exceptions import TelegramForbiddenError
 from aiogram.types import FSInputFile
 from config import BOT_TOKEN, CHANNEL_ID, ADMINS
 from database import init_db, add_site, remove_site, get_sites, is_news_sent, mark_news_sent
-
+from site import post_news_to_site
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
@@ -24,7 +24,9 @@ async def send_news_to_admin(news_text: str, source_url: str):
     pending_news[news_id] = {"url": source_url, "image": image_path, "text": news_text}
 
     keyboard = InlineKeyboardBuilder()
-    keyboard.button(text="✅ Подтвердить", callback_data=f"approve|{news_id}")
+    keyboard.button(text="🌐 На сайт", callback_data=f"site|{news_id}")
+    keyboard.button(text="✅ В Telegram", callback_data=f"approve|{news_id}")
+    keyboard.button(text="🚀 Оба", callback_data=f"both|{news_id}")
     keyboard.button(text="❌ Отклонить", callback_data=f"reject|{news_id}")
 
     photo = FSInputFile(image_path)
@@ -95,6 +97,57 @@ async def approve_news(callback: types.CallbackQuery):
             await bot.send_message(admin_id, "✅ Новость опубликована.")
         except Exception:
             pass
+
+
+@dp.callback_query(F.data.startswith("site|"))
+async def post_to_site(callback: types.CallbackQuery):
+    await callback.answer()
+    _, news_id = callback.data.split("|", 1)
+    data = pending_news.get(news_id)
+    if not data:
+        await callback.message.answer("❌ Новость не найдена.")
+        return
+
+    success = post_news_to_site(data["text"], data["image"])
+    if success:
+        await mark_news_sent(data["url"])
+        pending_news.pop(news_id, None)
+        await callback.message.answer("🌐 Новость опубликована на сайте!")
+    else:
+        await callback.message.answer("❌ Ошибка при публикации на сайте.")
+
+
+@dp.callback_query(F.data.startswith("both|"))
+async def post_to_both(callback: types.CallbackQuery):
+    await callback.answer()
+    _, news_id = callback.data.split("|", 1)
+    data = pending_news.get(news_id)
+    if not data:
+        await callback.message.answer("❌ Новость не найдена.")
+        return
+
+    image_path = data["image"]
+    text = data["text"]
+
+    # 1️⃣ Публикуем на сайт
+    success_site = post_news_to_site(text, image_path)
+
+    # 2️⃣ Публикуем в Telegram
+    try:
+        photo = FSInputFile(image_path)
+        await bot.send_photo(CHANNEL_ID, photo, caption=text, parse_mode="HTML")
+        success_tg = True
+    except Exception as e:
+        print("Ошибка публикации в Telegram:", e)
+        success_tg = False
+
+    # Результат
+    if success_site and success_tg:
+        await mark_news_sent(data["url"])
+        pending_news.pop(news_id, None)
+        await callback.message.answer("🚀 Новость опубликована в Telegram и на сайте!")
+    else:
+        await callback.message.answer("⚠️ Ошибка при публикации (проверь лог).")
 
 # Отклонение новости
 @dp.callback_query(F.data.startswith("reject|"))
