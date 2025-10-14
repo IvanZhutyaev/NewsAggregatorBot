@@ -1,3 +1,6 @@
+import os
+from datetime import datetime
+
 import requests
 import json
 from bs4 import BeautifulSoup
@@ -41,7 +44,7 @@ def login_to_site() -> bool:
 
 
 def extract_title_and_body(text: str):
-    """Разделяет текст на заголовок и тело"""
+    """Разделяет текст на заголовок и тело с улучшенной логикой"""
     # Убираем лишние пробелы
     text = text.strip()
 
@@ -65,11 +68,14 @@ def extract_title_and_body(text: str):
     title = re.sub(r'\s+', ' ', title)  # Заменяем множественные пробелы на один
     title = title[:255]  # Ограничиваем длину
 
+    # Очищаем тело текста
+    body = re.sub(r'\s+', ' ', body)  # Заменяем множественные пробелы на один
+
     print(f"📄 Извлечен заголовок: {title}")
     print(f"📄 Извлечен текст: {len(body)} символов")
+    print(f"📄 Подзаголовок (первые 100 символов): {body[:100]}...")
 
     return title, body
-
 
 def get_csrf_token_for_create() -> str:
     """Получаем CSRF токен со страницы создания новости"""
@@ -126,7 +132,7 @@ def get_csrf_token_for_create() -> str:
 
 
 def post_news_to_site_simple(news_text: str, image_path: str = None) -> bool:
-    """Исправленная версия с учетом ВСЕХ translatable полей"""
+    """Исправленная версия с подзаголовком и изображениями"""
     if not login_to_site():
         return False
 
@@ -140,10 +146,13 @@ def post_news_to_site_simple(news_text: str, image_path: str = None) -> bool:
     print("🔄 Используем правильный формат для ВСЕХ translatable полей Voyager...")
     print(f"📝 Отправляем данные на: {create_url}")
 
+    # Создаем подзаголовок из первых 100 символов текста
+    subtitle = body[:100] + "..." if len(body) > 100 else body
+
     # Генерируем SEO поля на основе заголовка и текста
     seo_title = title[:60]  # Ограничиваем для SEO
     seo_description = body[:160] if body else title[:160]  # Ограничиваем для SEO
-    seo_keywords = "агро, сельское хозяйство, новости"  # Базовые ключевые слова
+    seo_keywords = "агро, сельское хозяйство, новости, АПК"  # Базовые ключевые слова
 
     # ПРАВИЛЬНЫЙ формат для ВСЕХ translatable полей в Voyager
     data = {
@@ -152,7 +161,7 @@ def post_news_to_site_simple(news_text: str, image_path: str = None) -> bool:
 
         # ВСЕ translatable поля в правильном формате для Voyager
         "title_i18n": json.dumps({"ru": title, "kk": "", "en": "", "zh": ""}),
-        "subtitle_i18n": json.dumps({"ru": "", "kk": "", "en": "", "zh": ""}),
+        "subtitle_i18n": json.dumps({"ru": subtitle, "kk": "", "en": "", "zh": ""}),
         "description_i18n": json.dumps({"ru": body, "kk": "", "en": "", "zh": ""}),
         "seo_title_i18n": json.dumps({"ru": seo_title, "kk": "", "en": "", "zh": ""}),
         "seo_description_i18n": json.dumps({"ru": seo_description, "kk": "", "en": "", "zh": ""}),
@@ -160,11 +169,17 @@ def post_news_to_site_simple(news_text: str, image_path: str = None) -> bool:
 
         # Также отправляем обычные поля
         "title": title,
-        "subtitle": "",
+        "subtitle": subtitle,  # Добавляем подзаголовок
         "description": body,
         "seo_title": seo_title,
         "seo_description": seo_description,
         "seo_keywords": seo_keywords,
+
+        # Дополнительные поля, которые могут быть нужны
+        "status": "PUBLISHED",
+        "category_id": "",  # Можно указать ID категории если нужно
+        "author_id": "",  # Можно указать ID автора если нужно
+        "published_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
 
         # Системные поля
         "redirect_to": "",
@@ -174,18 +189,27 @@ def post_news_to_site_simple(news_text: str, image_path: str = None) -> bool:
     }
 
     files = {}
-    if image_path:
+    if image_path and os.path.exists(image_path):
         try:
+            # Основное изображение
             files["image"] = open(image_path, "rb")
-            print(f"🖼️ Изображение: {image_path}")
+            print(f"🖼️ Основное изображение: {image_path}")
+
+            # SEO изображение (может быть тем же самым)
+            files["seo_image"] = open(image_path, "rb")
+            print(f"🔍 SEO изображение: {image_path}")
+
         except Exception as e:
             print(f"⚠️ Не удалось открыть изображение: {e}")
+    else:
+        print("⚠️ Изображение не найдено или путь не указан")
 
     try:
-        response = session.post(create_url, data=data, files=files, timeout=20)
+        response = session.post(create_url, data=data, files=files, timeout=30)
 
-        if files:
-            files["image"].close()
+        # Закрываем файлы
+        for file_obj in files.values():
+            file_obj.close()
 
         print(f"📡 Ответ сервера: {response.status_code}")
 
@@ -200,11 +224,6 @@ def post_news_to_site_simple(news_text: str, image_path: str = None) -> bool:
             # Анализируем ошибку
             if "Invalid Translatable field" in error_content:
                 print("🔍 Проблема с translatable полями!")
-                # Показываем какие поля мы отправили
-                print("📋 Отправленные translatable поля:")
-                for key, value in data.items():
-                    if 'i18n' in key:
-                        print(f"  - {key}: отправлено")
 
             return False
 
@@ -216,7 +235,6 @@ def post_news_to_site_simple(news_text: str, image_path: str = None) -> bool:
                     return True
                 else:
                     print(f"⚠️ Редирект на: {location}")
-                    # Даже если редирект не на ожидаемую страницу, считаем успехом
                     return True
 
             # Проверяем успешность по содержимому
@@ -712,3 +730,39 @@ def debug_form_submission_detailed():
 
     except Exception as e:
         print(f"❌ Ошибка отладки: {e}")
+
+
+def analyze_image_upload():
+    """Анализирует поля для загрузки изображений"""
+    if not login_to_site():
+        return
+
+    create_url = f"{SITE_URL}/admin/news/create"
+    try:
+        resp = session.get(create_url)
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        print("🔍 Анализ полей для изображений:")
+        print("=" * 50)
+
+        # Ищем все поля типа file
+        file_inputs = soup.find_all('input', {'type': 'file'})
+        print(f"📋 Найдено полей для загрузки файлов: {len(file_inputs)}")
+
+        for file_input in file_inputs:
+            name = file_input.get('name', 'без имени')
+            accept = file_input.get('accept', '')
+            print(f"  - Поле: '{name}', принимает: '{accept}'")
+
+        # Ищем связанные с изображениями поля
+        image_related = soup.find_all(['input', 'textarea', 'select'],
+                                      attrs={'name': lambda x: x and 'image' in x.lower()})
+        print(f"📋 Найдено полей связанных с изображениями: {len(image_related)}")
+
+        for field in image_related:
+            name = field.get('name', 'без имени')
+            field_type = field.name
+            print(f"  - {name} (тип: {field_type})")
+
+    except Exception as e:
+        print(f"❌ Ошибка анализа полей изображений: {e}")
