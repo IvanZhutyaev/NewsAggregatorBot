@@ -41,31 +41,31 @@ def login_to_site() -> bool:
 
 def extract_title_and_body(text: str):
     """Разделяет текст на заголовок и тело"""
-    # Ищем первое двойное перенос строки - разделитель между заголовком и телом
-    parts = text.strip().split("\n\n", 1)
+    # Убираем лишние пробелы
+    text = text.strip()
 
-    if len(parts) == 2:
-        # Есть и заголовок, и тело
+    # Ищем разделитель - двойной перенос строки
+    if "\n\n" in text:
+        parts = text.split("\n\n", 1)
         title = parts[0].strip()
         body = parts[1].strip()
     else:
-        # Только заголовок или неправильный формат
-        lines = text.strip().split("\n")
+        # Ищем первый одинарный перенос строки
+        lines = text.split("\n")
         if len(lines) > 1:
-            # Берем первую строку как заголовок, остальное как тело
             title = lines[0].strip()
             body = "\n".join(lines[1:]).strip()
         else:
-            # Только одна строка - используем как заголовок
-            title = text.strip()
+            # Только одна строка
+            title = text
             body = ""
 
-    # Очищаем заголовок от лишних символов и ограничиваем длину
-    title = re.sub(r'[^\w\s\-–—.,!?;:()«»"]', '', title)
-    title = title[:255]  # Ограничиваем длину для базы данных
+    # Очищаем и ограничиваем заголовок
+    title = re.sub(r'\s+', ' ', title)  # Заменяем множественные пробелы на один
+    title = title[:255]  # Ограничиваем длину
 
     print(f"📄 Извлечен заголовок: {title}")
-    print(f"📄 Извлечен текст: {body[:100]}..." if body else "📄 Текст отсутствует")
+    print(f"📄 Извлечен текст: {len(body)} символов")
 
     return title, body
 
@@ -108,48 +108,39 @@ def post_news_to_site(news_text: str, image_path: str = None) -> bool:
     print(f"Текст ({len(body)} симв.): {body[:100]}..." if body else "Текст отсутствует")
     print(f"CSRF токен: {csrf_token[:20]}...")
 
-    # Пробуем разные варианты полей
-    data_variants = [
-        # Вариант 1: Только базовые поля
-        {
-            "_token": csrf_token,
-            "title": title,
-            "body": body,
-        },
-        # Вариант 2: С русскими полями
-        {
-            "_token": csrf_token,
-            "title_ru": title,
-            "body_ru": body,
-        },
-        # Вариант 3: Полный набор полей
-        {
-            "_token": csrf_token,
-            "title": title,
-            "title_ru": title,
-            "title_en": title,
-            "title_kk": title,
-            "body": body,
-            "body_ru": body,
-            "body_en": body,
-            "body_kk": body,
-            "excerpt": body[:200] if body else title[:200],
-            "slug": "",
-            "status": "PUBLISHED",
-            "category_id": "1",
-            "author_id": "1",
-        },
-        # Вариант 4: Альтернативные названия полей
-        {
-            "_token": csrf_token,
-            "name": title,
-            "name_ru": title,
-            "content": body,
-            "content_ru": body,
-            "description": body,
-            "description_ru": body,
-        }
-    ]
+    # Правильные данные на основе анализа формы
+    data = {
+        "_token": csrf_token,
+        # Основные поля
+        "title": title,
+        "subtitle": title[:100],  # краткий заголовок
+        "description": body,
+        # SEO поля
+        "seo_title": title[:60],
+        "seo_description": body[:160] if body else title[:160],
+        "seo_keywords": ", ".join(title.split()[:5]),
+        "seo_slug": "",
+        # Скрытые поля i18n (мультиязычность)
+        "title_i18n": '{"ru":"' + title + '","kk":"' + title + '","en":"' + title + '","zh":"' + title + '"}',
+        "subtitle_i18n": '{"ru":"' + title[:100] + '","kk":"' + title[:100] + '","en":"' + title[
+                                                                                           :100] + '","zh":"' + title[
+                                                                                                                :100] + '"}',
+        "description_i18n": '{"ru":"' + body + '","kk":"' + body + '","en":"' + body + '","zh":"' + body + '"}',
+        "seo_title_i18n": '{"ru":"' + title[:60] + '","kk":"' + title[:60] + '","en":"' + title[
+                                                                                          :60] + '","zh":"' + title[
+                                                                                                              :60] + '"}',
+        "seo_description_i18n": '{"ru":"' + (body[:160] if body else title[:160]) + '","kk":"' + (
+            body[:160] if body else title[:160]) + '","en":"' + (body[:160] if body else title[:160]) + '","zh":"' + (
+                                    body[:160] if body else title[:160]) + '"}',
+        "seo_keywords_i18n": '{"ru":"' + ", ".join(title.split()[:5]) + '","kk":"' + ", ".join(
+            title.split()[:5]) + '","en":"' + ", ".join(title.split()[:5]) + '","zh":"' + ", ".join(
+            title.split()[:5]) + '"}',
+        # Дополнительные поля
+        "redirect_to": "",
+        "model_name": "App\\Models\\News",
+        "model_id": "",
+        "type_slug": "news",
+    }
 
     files = {}
     if image_path:
@@ -159,46 +150,61 @@ def post_news_to_site(news_text: str, image_path: str = None) -> bool:
         except Exception as e:
             print(f"⚠️ Не удалось открыть изображение: {e}")
 
-    # Пробуем все варианты данных
-    for i, data in enumerate(data_variants, 1):
-        print(f"🔧 Пробуем вариант {i}/4...")
+    try:
+        print(f"🌐 Отправляем запрос на: {create_url}")
+        response = session.post(create_url, data=data, files=files, timeout=20)
 
-        try:
-            print(f"🌐 Отправляем запрос на: {create_url}")
-            response = session.post(create_url, data=data, files=files, timeout=20)
+        if files:
+            files["image"].close()
 
-            print(f"📡 Ответ сервера: {response.status_code}")
+        print(f"📡 Ответ сервера: {response.status_code}")
 
-            if response.status_code == 200:
-                # Проверяем успешность по содержимому ответа
-                if any(keyword in response.text.lower() for keyword in ['success', 'успех', 'создан', 'добавлен']):
-                    print(f"✅ Новость успешно опубликована (вариант {i})!")
-                    if files:
-                        files["image"].close()
-                    return True
-                else:
-                    print(f"⚠️ Ответ 200, но нет подтверждения успеха (вариант {i})")
-            elif response.status_code == 302:
-                print(f"✅ Новость опубликована (редирект) (вариант {i})!")
-                if files:
-                    files["image"].close()
+        # Детальный анализ ответа
+        if response.status_code == 500:
+            print("❌ Ошибка 500 - внутренняя ошибка сервера")
+            print("🔍 Тело ответа:")
+            error_text = response.text
+            print(error_text[:1500])  # Больше символов для анализа
+
+            # Ищем конкретную ошибку в тексте
+            if "title_i18n" in error_text:
+                print("⚠️ Проблема с полем title_i18n")
+            if "description_i18n" in error_text:
+                print("⚠️ Проблема с полем description_i18n")
+
+            return False
+
+        if response.status_code in (200, 302):
+            if "voyager/news" in response.text or response.status_code == 302:
+                print("🌐 Новость успешно опубликована на сайте!")
                 return True
-            elif response.status_code == 500:
-                print(f"❌ Ошибка 500 с вариантом {i}")
-                # Продолжаем пробовать следующий вариант
-                continue
             else:
-                print(f"❌ Ошибка {response.status_code} с вариантом {i}")
+                print("⚠️ Ответ не подтверждает успешное добавление.")
+                # Проверяем на наличие сообщений об успехе
+                success_keywords = ['успех', 'создан', 'добавлен', 'success', 'created', 'added']
+                if any(keyword in response.text.lower() for keyword in success_keywords):
+                    print("✅ Похоже, новость добавлена успешно (найдены ключевые слова)")
+                    return True
 
-        except Exception as e:
-            print(f"❌ Ошибка при отправке (вариант {i}): {e}")
-            continue
+                # Проверяем наличие ошибок валидации
+                error_keywords = ['error', 'ошибка', 'validation', 'валидация']
+                if any(keyword in response.text.lower() for keyword in error_keywords):
+                    print("❌ Найдены ошибки в ответе")
+                    # Ищем конкретные ошибки
+                    soup = BeautifulSoup(response.text, "html.parser")
+                    errors = soup.find_all(class_=['error', 'alert-danger', 'validation-error'])
+                    for error in errors:
+                        print(f"Ошибка: {error.get_text(strip=True)}")
 
-    if files:
-        files["image"].close()
+                return False
+        else:
+            print(f"❌ Ошибка публикации: {response.status_code}")
+            print(f"Текст ответа: {response.text[:500]}")
+            return False
 
-    print("❌ Все варианты данных не сработали")
-    return False
+    except Exception as e:
+        print(f"❌ Ошибка при отправке новости: {e}")
+        return False
 
 
 def analyze_create_form():
