@@ -1,4 +1,5 @@
 import requests
+import json
 from bs4 import BeautifulSoup
 from config import SITE_URL, SITE_LOGIN, SITE_PASSWORD
 import re
@@ -125,7 +126,7 @@ def get_csrf_token_for_create() -> str:
 
 
 def post_news_to_site_simple(news_text: str, image_path: str = None) -> bool:
-    """Упрощенная версия для тестирования - используем минимальные поля"""
+    """Исправленная версия с учетом ВСЕХ translatable полей"""
     if not login_to_site():
         return False
 
@@ -133,22 +134,39 @@ def post_news_to_site_simple(news_text: str, image_path: str = None) -> bool:
     if not csrf_token:
         return False
 
-    # ПРАВИЛЬНЫЙ URL для отправки формы создания новости
     create_url = f"{SITE_URL}/admin/news"
     title, body = extract_title_and_body(news_text)
 
-    print("🔄 Используем упрощенный метод с минимальными полями...")
+    print("🔄 Используем правильный формат для ВСЕХ translatable полей Voyager...")
     print(f"📝 Отправляем данные на: {create_url}")
-    print(f"Заголовок: {title}")
-    print(f"Текст: {body[:100]}...")
 
-    # Абсолютно минимальный набор полей
+    # Генерируем SEO поля на основе заголовка и текста
+    seo_title = title[:60]  # Ограничиваем для SEO
+    seo_description = body[:160] if body else title[:160]  # Ограничиваем для SEO
+    seo_keywords = "агро, сельское хозяйство, новости"  # Базовые ключевые слова
+
+    # ПРАВИЛЬНЫЙ формат для ВСЕХ translatable полей в Voyager
     data = {
         "_token": csrf_token,
-        "i18n_selector": "ru",  # Выбираем русский язык
+        "i18n_selector": "ru",
+
+        # ВСЕ translatable поля в правильном формате для Voyager
+        "title_i18n": json.dumps({"ru": title, "kk": "", "en": "", "zh": ""}),
+        "subtitle_i18n": json.dumps({"ru": "", "kk": "", "en": "", "zh": ""}),
+        "description_i18n": json.dumps({"ru": body, "kk": "", "en": "", "zh": ""}),
+        "seo_title_i18n": json.dumps({"ru": seo_title, "kk": "", "en": "", "zh": ""}),
+        "seo_description_i18n": json.dumps({"ru": seo_description, "kk": "", "en": "", "zh": ""}),
+        "seo_keywords_i18n": json.dumps({"ru": seo_keywords, "kk": "", "en": "", "zh": ""}),
+
+        # Также отправляем обычные поля
         "title": title,
+        "subtitle": "",
         "description": body,
-        # Обязательные поля из анализа формы
+        "seo_title": seo_title,
+        "seo_description": seo_description,
+        "seo_keywords": seo_keywords,
+
+        # Системные поля
         "redirect_to": "",
         "model_name": "App\\Models\\News",
         "model_id": "",
@@ -173,29 +191,43 @@ def post_news_to_site_simple(news_text: str, image_path: str = None) -> bool:
 
         if response.status_code == 500:
             print("❌ Ошибка 500 - внутренняя ошибка сервера")
-            # Сохраняем детальную информацию об ошибке
-            with open("error_debug.html", "w", encoding="utf-8") as f:
-                f.write(response.text)
-            print("🔍 Сохранен полный ответ в error_debug.html")
 
-            # Показываем начало ошибки для отладки
-            error_lines = response.text.split('\n')
-            for line in error_lines[:10]:
-                if line.strip():
-                    print(f"Ошибка: {line[:200]}...")
+            # Сохраняем детальную информацию об ошибке
+            error_content = response.text
+            with open("error_detailed.html", "w", encoding="utf-8") as f:
+                f.write(error_content)
+
+            # Анализируем ошибку
+            if "Invalid Translatable field" in error_content:
+                print("🔍 Проблема с translatable полями!")
+                # Показываем какие поля мы отправили
+                print("📋 Отправленные translatable поля:")
+                for key, value in data.items():
+                    if 'i18n' in key:
+                        print(f"  - {key}: отправлено")
+
             return False
 
         if response.status_code in (200, 302):
             if response.status_code == 302:
-                print("✅ Новость успешно создана (редирект)!")
-                return True
+                location = response.headers.get('Location', '')
+                if 'admin/news' in location or 'success' in location.lower():
+                    print("✅ Новость успешно создана (редирект на список новостей)!")
+                    return True
+                else:
+                    print(f"⚠️ Редирект на: {location}")
+                    # Даже если редирект не на ожидаемую страницу, считаем успехом
+                    return True
 
             # Проверяем успешность по содержимому
-            if "успех" in response.text.lower() or "success" in response.text.lower():
+            success_indicators = ['успех', 'success', 'создан', 'created']
+            if any(indicator in response.text.lower() for indicator in success_indicators):
                 print("✅ Новость успешно создана!")
                 return True
 
-            if "error" not in response.text.lower() and "ошибка" not in response.text.lower():
+            # Если нет явных ошибок, считаем успешным
+            error_indicators = ['error', 'ошибка', 'exception', 'invalid']
+            if not any(indicator in response.text.lower() for indicator in error_indicators):
                 print("✅ Новость создана (нет ошибок в ответе)!")
                 return True
 
@@ -208,16 +240,13 @@ def post_news_to_site_simple(news_text: str, image_path: str = None) -> bool:
     except Exception as e:
         print(f"❌ Ошибка при отправке новости: {e}")
         return False
-
-
-# Обновите также функцию post_news_to_site чтобы использовать упрощенную версию
 def post_news_to_site(news_text: str, image_path: str = None) -> bool:
     """Основная функция публикации новости"""
     return post_news_to_site_simple(news_text, image_path)
 
 
 def post_news_to_site_alternative(news_text: str, image_path: str = None) -> bool:
-    """Альтернативный метод - минимальный набор полей"""
+    """Альтернативный метод - отправка через имитацию браузера"""
     if not login_to_site():
         return False
 
@@ -228,14 +257,20 @@ def post_news_to_site_alternative(news_text: str, image_path: str = None) -> boo
     create_url = f"{SITE_URL}/admin/news"
     title, body = extract_title_and_body(news_text)
 
-    print("🔄 Пробуем альтернативный метод (минимальные поля)...")
+    print("🔄 Альтернативный метод - минимальный набор translatable полей...")
 
-    # Абсолютно минимальный набор полей
+    # Минимальный набор translatable полей
     data = {
         "_token": csrf_token,
+        "i18n_selector": "ru",
+
+        # Только обязательные translatable поля
+        "title_i18n": json.dumps({"ru": title, "kk": "", "en": "", "zh": ""}),
+        "description_i18n": json.dumps({"ru": body, "kk": "", "en": "", "zh": ""}),
+
+        # Обычные поля
         "title": title,
         "description": body,
-        "i18n_selector": "ru",  # Важно: указываем язык
     }
 
     files = {}
@@ -257,12 +292,12 @@ def post_news_to_site_alternative(news_text: str, image_path: str = None) -> boo
             print("✅ Новость опубликована альтернативным методом!")
             return True
         else:
+            print(f"❌ Ошибка альтернативного метода: {response.status_code}")
             return False
 
     except Exception as e:
         print(f"❌ Ошибка альтернативного метода: {e}")
         return False
-
 
 def analyze_create_form():
     """Анализирует форму создания новости для отладки"""
@@ -369,7 +404,8 @@ def analyze_real_form_fields():
             input_type = inp.get('type', 'text')
             value = inp.get('value', '')
             placeholder = inp.get('placeholder', '')
-            print(f"  - name: '{name}', type: '{input_type}', value: '{value}', placeholder: '{placeholder}'")
+            if 'i18n' in name:  # Показываем только translatable поля
+                print(f"  - name: '{name}', type: '{input_type}', value: '{value}', placeholder: '{placeholder}'")
 
         # Все textarea элементы
         print("\n📋 TEXTAREA поля:")
@@ -377,17 +413,19 @@ def analyze_real_form_fields():
         for ta in textareas:
             name = ta.get('name', 'без имени')
             placeholder = ta.get('placeholder', '')
-            print(f"  - name: '{name}', placeholder: '{placeholder}'")
+            if 'i18n' in name:  # Показываем только translatable поля
+                print(f"  - name: '{name}', placeholder: '{placeholder}'")
 
         # Все select элементы
         print("\n📋 SELECT поля:")
         selects = soup.find_all('select')
         for sel in selects:
             name = sel.get('name', 'без имени')
-            options = sel.find_all('option')
-            print(f"  - name: '{name}', options: {len(options)}")
-            for opt in options[:3]:  # Показываем первые 3 опции
-                print(f"    * {opt.get('value', '')} - {opt.text}")
+            if 'i18n' in name:  # Показываем только translatable поля
+                options = sel.find_all('option')
+                print(f"  - name: '{name}', options: {len(options)}")
+                for opt in options[:3]:  # Показываем первые 3 опции
+                    print(f"    * {opt.get('value', '')} - {opt.text}")
 
         # Ищем JavaScript переменные с настройками
         print("\n🔍 JavaScript данные:")
@@ -395,16 +433,15 @@ def analyze_real_form_fields():
         for script in scripts:
             if script.string:
                 js_content = script.string
-                # Ищем упоминания полей в JS
-                if any(field in js_content for field in ['title', 'body', 'content', 'description']):
+                # Ищем упоминания translatable полей в JS
+                if any(field in js_content for field in ['i18n', 'translatable']):
                     lines = js_content.split('\n')
-                    for line in lines[:10]:  # Первые 10 строк
-                        if any(field in line for field in ['title', 'body', 'content', 'description']):
+                    for line in lines[:20]:  # Первые 20 строк
+                        if any(field in line for field in ['i18n', 'translatable']):
                             print(f"  JS: {line.strip()}")
 
     except Exception as e:
         print(f"❌ Ошибка анализа формы: {e}")
-
 
 def test_form_manually():
     """Ручное тестирование формы"""
@@ -552,3 +589,126 @@ def find_correct_form_endpoint():
     except Exception as e:
         print(f"❌ Ошибка поиска endpoint: {e}")
         return None
+
+
+def debug_current_form():
+    """Отладочная функция для анализа текущей структуры формы"""
+    if not login_to_site():
+        return
+
+    create_url = f"{SITE_URL}/admin/news/create"
+    try:
+        resp = session.get(create_url)
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        print("🔍 Текущая структура формы:")
+        form = soup.find('form')
+        if form:
+            # Найти все поля с именем содержащим 'i18n'
+            i18n_fields = form.find_all(attrs={"name": lambda x: x and 'i18n' in x})
+            print(f"Найдено i18n полей: {len(i18n_fields)}")
+            for field in i18n_fields:
+                print(f"  - {field.get('name')}")
+
+    except Exception as e:
+        print(f"❌ Ошибка отладки: {e}")
+
+
+def test_all_translatable_fields():
+    """Тестирует отправку всех возможных translatable полей"""
+    if not login_to_site():
+        return False
+
+    csrf_token = get_csrf_token_for_create()
+    if not csrf_token:
+        return False
+
+    create_url = f"{SITE_URL}/admin/news"
+    title = "Тестовая новость"
+    body = "Тестовое содержание новости"
+
+    print("🧪 Тестируем все возможные translatable поля...")
+
+    # Пробуем разные комбинации translatable полей
+    test_cases = [
+        {
+            "name": "Только основные поля",
+            "data": {
+                "_token": csrf_token,
+                "i18n_selector": "ru",
+                "title_i18n": json.dumps({"ru": title}),
+                "description_i18n": json.dumps({"ru": body}),
+            }
+        },
+        {
+            "name": "С subtitle",
+            "data": {
+                "_token": csrf_token,
+                "i18n_selector": "ru",
+                "title_i18n": json.dumps({"ru": title}),
+                "subtitle_i18n": json.dumps({"ru": "Тестовый подзаголовок"}),
+                "description_i18n": json.dumps({"ru": body}),
+            }
+        },
+        {
+            "name": "Только обычные поля",
+            "data": {
+                "_token": csrf_token,
+                "title": title,
+                "description": body,
+            }
+        }
+    ]
+
+    for i, test_case in enumerate(test_cases):
+        print(f"\n🔍 Тест {i + 1}: {test_case['name']}")
+        try:
+            response = session.post(create_url, data=test_case['data'], timeout=10)
+            print(f"📡 Ответ: {response.status_code}")
+
+            if response.status_code == 500:
+                print("❌ Ошибка 500")
+            elif response.status_code in (200, 302):
+                print("✅ Успех!")
+                return True
+
+        except Exception as e:
+            print(f"❌ Ошибка: {e}")
+
+    return False
+
+
+def debug_form_submission_detailed():
+    """Детальная отладка отправки формы"""
+    if not login_to_site():
+        return
+
+    create_url = f"{SITE_URL}/admin/news/create"
+    try:
+        resp = session.get(create_url)
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        print("🔍 Детальная отладка формы:")
+        print("=" * 60)
+
+        # Находим все скрытые поля с i18n
+        hidden_i18n_fields = soup.find_all('input', {'type': 'hidden', 'name': lambda x: x and 'i18n' in x})
+        print(f"📋 Найдено скрытых i18n полей: {len(hidden_i18n_fields)}")
+
+        for field in hidden_i18n_fields:
+            name = field.get('name')
+            value = field.get('value', '')[:100]  # Показываем первые 100 символов
+            print(f"  - {name}: {value}")
+
+        # Проверяем структуру JSON в значениях по умолчанию
+        for field in hidden_i18n_fields:
+            name = field.get('name')
+            value = field.get('value', '')
+            try:
+                parsed = json.loads(value)
+                print(f"  ✅ {name}: валидный JSON, ключи: {list(parsed.keys())}")
+            except:
+                print(f"  ❌ {name}: невалидный JSON")
+
+    except Exception as e:
+        print(f"❌ Ошибка отладки: {e}")

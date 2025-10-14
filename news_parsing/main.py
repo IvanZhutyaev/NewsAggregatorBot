@@ -12,7 +12,9 @@ async def main():
 
     # Настройка логирования
     logging.basicConfig(level=logging.INFO)
+    site_poster.debug_form_submission_detailed()
     site_poster.find_correct_form_endpoint()
+    site_poster.debug_current_form()
     # Запускаем фоновую задачу парсера
     parser_task = asyncio.create_task(scheduler())
 

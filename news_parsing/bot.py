@@ -108,54 +108,60 @@ async def approve_news(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("site|"))
 async def post_to_site(callback: types.CallbackQuery):
-    await callback.answer()
-    _, news_id = callback.data.split("|", 1)
-    data = pending_news.get(news_id)
-    if not data:
-        await callback.message.answer("❌ Новость не найдена.")
-        return
+    try:
+        await callback.answer()
+        _, news_id = callback.data.split("|", 1)
+        data = pending_news.get(news_id)
+        if not data:
+            await callback.message.answer("❌ Новость не найдена.")
+            return
 
-    success = post_news_to_site(data["text"], data["image"])
-    if success:
-        await mark_news_sent(data["url"])
-        pending_news.pop(news_id, None)
-        await callback.message.answer("🌐 Новость опубликована на сайте!")
-    else:
-        await callback.message.answer("❌ Ошибка при публикации на сайте.")
-
+        success = post_news_to_site(data["text"], data["image"])
+        if success:
+            await mark_news_sent(data["url"])
+            pending_news.pop(news_id, None)
+            await callback.message.answer("🌐 Новость опубликована на сайте!")
+        else:
+            await callback.message.answer("❌ Ошибка при публикации на сайте.")
+    except Exception as e:
+        print(f"❌ Ошибка в post_to_site: {e}")
+        await callback.message.answer("❌ Произошла ошибка при публикации на сайте.")
 
 @dp.callback_query(F.data.startswith("both|"))
 async def post_to_both(callback: types.CallbackQuery):
-    await callback.answer()
-    _, news_id = callback.data.split("|", 1)
-    data = pending_news.get(news_id)
-    if not data:
-        await callback.message.answer("❌ Новость не найдена.")
-        return
-
-    image_path = data["image"]
-    text = data["text"]
-
-    # 1️⃣ Публикуем на сайт
-    success_site = post_news_to_site(text, image_path)
-
-    # 2️⃣ Публикуем в Telegram
     try:
-        photo = FSInputFile(image_path)
-        await bot.send_photo(CHANNEL_ID, photo, caption=text, parse_mode="HTML")
-        success_tg = True
+        await callback.answer()
+        _, news_id = callback.data.split("|", 1)
+        data = pending_news.get(news_id)
+        if not data:
+            await callback.message.answer("❌ Новость не найдена.")
+            return
+
+        image_path = data["image"]
+        text = data["text"]
+
+        # 1️⃣ Публикуем на сайт
+        success_site = post_news_to_site(text, image_path)
+
+        # 2️⃣ Публикуем в Telegram
+        try:
+            photo = FSInputFile(image_path)
+            await bot.send_photo(CHANNEL_ID, photo, caption=text, parse_mode="HTML")
+            success_tg = True
+        except Exception as e:
+            print("Ошибка публикации в Telegram:", e)
+            success_tg = False
+
+        # Результат
+        if success_site and success_tg:
+            await mark_news_sent(data["url"])
+            pending_news.pop(news_id, None)
+            await callback.message.answer("🚀 Новость опубликована в Telegram и на сайте!")
+        else:
+            await callback.message.answer("⚠️ Ошибка при публикации (проверь лог).")
     except Exception as e:
-        print("Ошибка публикации в Telegram:", e)
-        success_tg = False
-
-    # Результат
-    if success_site and success_tg:
-        await mark_news_sent(data["url"])
-        pending_news.pop(news_id, None)
-        await callback.message.answer("🚀 Новость опубликована в Telegram и на сайте!")
-    else:
-        await callback.message.answer("⚠️ Ошибка при публикации (проверь лог).")
-
+        print(f"❌ Ошибка в post_to_both: {e}")
+        await callback.message.answer("❌ Произошла ошибка при публикации.")
 # Отклонение новости
 @dp.callback_query(F.data.startswith("reject|"))
 async def reject_news(callback: types.CallbackQuery):
