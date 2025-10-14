@@ -5,7 +5,8 @@ import re
 import html
 from bs4 import BeautifulSoup
 from config import DEEPSEEK_KEY
-from database import get_sites, is_news_sent, is_news_published, mark_news_sent
+from database import get_sites, is_news_sent, is_news_published, mark_news_sent, add_to_queue, clear_stuck_processing, \
+    get_next_from_queue, mark_queue_processed, get_queue_size
 from bot import send_news_to_admin
 
 
@@ -249,20 +250,34 @@ async def process_entry(entry):
 
 # Парсинг фида и обработка новостей
 async def parse_feed_and_process(url: str, limit: int = 5) -> int:
+    """Парсит RSS и добавляет новости в очередь"""
     feed = feedparser.parse(url)
-    processed_count = 0
+    added_to_queue = 0
 
     for entry in feed.entries[:limit]:
         link = getattr(entry, "link", "")
-        # Проверяем не опубликована ли новость, а не отправлена ли на модерацию
-        if not await is_news_published(link):  # Изменено здесь
-            news_text = await process_entry(entry)
-            await send_news_to_admin(news_text, link)
-            await mark_news_sent(link)  # Отмечаем как отправленную на модерацию
-            processed_count += 1
-            await asyncio.sleep(1)
 
-    return processed_count
+        # Проверяем не опубликована ли новость
+        if not await is_news_published(link):
+            print(f"📥 Добавляем новость в очередь: {getattr(entry, 'title', 'Без названия')}")
+
+            # Обрабатываем новость для получения текста
+            news_text = await process_entry(entry)
+            title = getattr(entry, "title", "Без названия")
+
+            # Получаем путь к случайному изображению
+            import os
+            import random
+            image_files = os.listdir("images")
+            image_path = os.path.join("images", random.choice(image_files)) if image_files else None
+
+            # Добавляем в очередь
+            await add_to_queue(link, title, news_text, image_path)
+            added_to_queue += 1
+
+            await asyncio.sleep(0.5)  # Небольшая задержка
+
+    return added_to_queue
 
 
 # Проверка новостей и отправка админу
@@ -272,8 +287,82 @@ async def check_news_and_send():
         await parse_feed_and_process(url, limit=5)
 
 
+async def process_next_from_queue():
+    """Обрабатывает следующую новость из очереди"""
+    try:
+        # Очищаем зависшие обработки
+        await clear_stuck_processing()
+
+        # Получаем следующую новость из очереди
+        queue_item = await get_next_from_queue()
+
+        if not queue_item:
+            return False
+
+        queue_id, link, title, news_text, image_path = queue_item
+
+        print(f"🎯 Обрабатываем новость из очереди: {title}")
+        print(f"🔗 Ссылка: {link}")
+
+        # Отправляем админам на модерацию
+        await send_news_to_admin(news_text, link)
+
+        # Помечаем как отправленную на модерацию
+        await mark_news_sent(link)
+
+        # Удаляем из очереди после успешной обработки
+        await mark_queue_processed(link)
+
+        print(f"✅ Новость из очереди обработана и отправлена админам")
+        return True
+
+    except Exception as e:
+        print(f"❌ Ошибка обработки новости из очереди: {e}")
+        # В случае ошибки снимаем блокировку с новости
+        if 'queue_item' in locals() and queue_item:
+            await mark_queue_processed(queue_item[1])
+        return False
 # Фоновая проверка
 async def scheduler():
+    """Новый планировщик с очередью"""
     while True:
-        await check_news_and_send()
-        await asyncio.sleep(600)
+        try:
+            # Проверяем размер очереди
+            queue_size = await get_queue_size()
+            print(f"📊 Размер очереди: {queue_size} новостей")
+
+            # Если очередь пуста, парсим новые новости
+            if queue_size == 0:
+                print("🔄 Очередь пуста, парсим новые новости...")
+                sites = await get_sites()
+                total_added = 0
+
+                for url in sites:
+                    try:
+                        added = await parse_feed_and_process(url, limit=2)  # Ограничиваем количество
+                        total_added += added
+                        print(f"✅ Добавлено {added} новостей из {url}")
+                        await asyncio.sleep(2)  # Задержка между сайтами
+                    except Exception as e:
+                        print(f"❌ Ошибка парсинга {url}: {e}")
+
+                print(f"🎯 Всего добавлено в очередь: {total_added} новостей")
+
+            # Обрабатываем следующую новость из очереди
+            if await get_queue_size() > 0:
+                success = await process_next_from_queue()
+                if success:
+                    # После успешной обработки ждем перед следующей
+                    print("⏳ Ожидаем решения админа перед следующей новостью...")
+                    await asyncio.sleep(30)  # Ждем 30 секунд перед следующей новостью
+                else:
+                    # В случае ошибки ждем меньше
+                    await asyncio.sleep(10)
+            else:
+                # Если очередь пуста, ждем дольше
+                print("⏰ Очередь пуста, следующая проверка через 5 минут...")
+                await asyncio.sleep(300)  # 5 минут
+
+        except Exception as e:
+            print(f"❌ Ошибка в планировщике: {e}")
+            await asyncio.sleep(60)  # Ждем минуту при ошибке

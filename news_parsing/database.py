@@ -16,7 +16,6 @@ async def init_db():
             link TEXT UNIQUE
         )
         """)
-        # Новая таблица для опубликованных новостей
         await db.execute("""
         CREATE TABLE IF NOT EXISTS published_news (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -24,6 +23,18 @@ async def init_db():
             published_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
         """)
+        await db.execute("""
+                CREATE TABLE IF NOT EXISTS processing_queue (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    link TEXT UNIQUE,
+                    title TEXT,
+                    news_text TEXT,
+                    image_path TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    is_processing BOOLEAN DEFAULT FALSE,
+                    processed_by INTEGER DEFAULT NULL
+                )
+                """)
         await db.commit()
 
 async def add_site(url):
@@ -79,4 +90,66 @@ async def cleanup_old_pending_news(days=7):
                 AND date(ns.id) < date('now', ?)
             )
         """, (f"-{days} days",))
+        await db.commit()
+
+
+async def add_to_queue(link: str, title: str, news_text: str, image_path: str):
+    """Добавляет новость в очередь обработки"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("""
+            INSERT OR IGNORE INTO processing_queue (link, title, news_text, image_path)
+            VALUES (?, ?, ?, ?)
+        """, (link, title, news_text, image_path))
+        await db.commit()
+
+
+async def get_next_from_queue():
+    """Получает следующую новость из очереди для обработки"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        # Ищем первую необрабатываемую новость
+        cursor = await db.execute("""
+            SELECT id, link, title, news_text, image_path 
+            FROM processing_queue 
+            WHERE is_processing = FALSE 
+            ORDER BY created_at ASC 
+            LIMIT 1
+        """)
+        news = await cursor.fetchone()
+
+        if news:
+            # Помечаем как обрабатываемую
+            await db.execute("""
+                UPDATE processing_queue 
+                SET is_processing = TRUE 
+                WHERE id = ?
+            """, (news[0],))
+            await db.commit()
+
+        return news
+
+
+async def mark_queue_processed(link: str):
+    """Помечает новость в очереди как обработанную (удаляет из очереди)"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("DELETE FROM processing_queue WHERE link = ?", (link,))
+        await db.commit()
+
+
+async def get_queue_size():
+    """Возвращает размер очереди"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        cursor = await db.execute("SELECT COUNT(*) FROM processing_queue")
+        result = await cursor.fetchone()
+        return result[0] if result else 0
+
+
+async def clear_stuck_processing():
+    """Очищает зависшие обработки (старше 10 минут)"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("""
+            UPDATE processing_queue 
+            SET is_processing = FALSE 
+            WHERE is_processing = TRUE 
+            AND datetime(created_at) < datetime('now', '-10 minutes')
+        """)
         await db.commit()
