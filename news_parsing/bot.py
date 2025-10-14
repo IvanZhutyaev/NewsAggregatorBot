@@ -5,7 +5,7 @@ import hashlib
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.exceptions import TelegramForbiddenError
+from aiogram.exceptions import TelegramForbiddenError, TelegramNetworkError
 from aiogram.types import FSInputFile
 from config import BOT_TOKEN, CHANNEL_ID, ADMINS
 from database import init_db, add_site, remove_site, get_sites, is_news_sent, mark_news_sent
@@ -18,46 +18,57 @@ pending_news = {}
 
 # Отправка новости админам
 async def send_news_to_admin(news_text: str, source_url: str):
-    try:
-        image_files = os.listdir("images")
-        if not image_files:
-            print("❌ Нет изображений в папке images")
-            return
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            image_files = os.listdir("images")
+            if not image_files:
+                print("❌ Нет изображений в папке images")
+                return
 
-        image_path = os.path.join("images", random.choice(image_files))
-        news_id = hashlib.md5(source_url.encode()).hexdigest()
-        pending_news[news_id] = {"url": source_url, "image": image_path, "text": news_text}
+            image_path = os.path.join("images", random.choice(image_files))
+            news_id = hashlib.md5(source_url.encode()).hexdigest()
+            pending_news[news_id] = {"url": source_url, "image": image_path, "text": news_text}
 
-        keyboard = InlineKeyboardBuilder()
-        keyboard.button(text="🌐 На сайт", callback_data=f"site|{news_id}")
-        keyboard.button(text="✅ В Telegram", callback_data=f"approve|{news_id}")
-        keyboard.button(text="🚀 Оба", callback_data=f"both|{news_id}")
-        keyboard.button(text="❌ Отклонить", callback_data=f"reject|{news_id}")
+            keyboard = InlineKeyboardBuilder()
+            keyboard.button(text="🌐 На сайт", callback_data=f"site|{news_id}")
+            keyboard.button(text="✅ В Telegram", callback_data=f"approve|{news_id}")
+            keyboard.button(text="🚀 Оба", callback_data=f"both|{news_id}")
+            keyboard.button(text="❌ Отклонить", callback_data=f"reject|{news_id}")
 
-        photo = FSInputFile(image_path)
-        admin_caption = f"{news_text}\n\nИсточник: {source_url}"
+            photo = FSInputFile(image_path)
+            admin_caption = f"{news_text}\n\nИсточник: {source_url}"
 
-        for admin_id in ADMINS:
-            try:
-                if len(admin_caption) <= 1024:
-                    await bot.send_photo(
-                        admin_id,
-                        photo,
-                        caption=admin_caption,
-                        parse_mode="HTML",
-                        reply_markup=keyboard.as_markup()
-                    )
-                else:
-                    await bot.send_photo(admin_id, photo, reply_markup=keyboard.as_markup())
-                    await bot.send_message(admin_id, admin_caption, parse_mode="HTML")
-                print(f"✅ Новость отправлена админу {admin_id}")
-            except TelegramForbiddenError:
-                print(f"❌ Не удалось отправить админу {admin_id} — он не написал боту.")
-            except Exception as e:
-                print(f"❌ Ошибка отправки админу {admin_id}: {e}")
+            for admin_id in ADMINS:
+                try:
+                    if len(admin_caption) <= 1024:
+                        await bot.send_photo(
+                            admin_id,
+                            photo,
+                            caption=admin_caption,
+                            reply_markup=keyboard.as_markup()
+                        )
+                    else:
+                        await bot.send_photo(admin_id, photo, reply_markup=keyboard.as_markup())
+                        await bot.send_message(admin_id, admin_caption)
+                    print(f"✅ Новость отправлена админу {admin_id}")
+                except TelegramForbiddenError:
+                    print(f"❌ Не удалось отправить админу {admin_id} — он не написал боту.")
+                except Exception as e:
+                    print(f"❌ Ошибка отправки админу {admin_id}: {e}")
 
-    except Exception as e:
-        print(f"❌ Критическая ошибка в send_news_to_admin: {e}")
+            break  # Успешно отправлено, выходим из цикла повторных попыток
+
+        except TelegramNetworkError as e:
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt  # Экспоненциальная задержка
+                print(f"⚠️ Ошибка сети, повторная попытка {attempt + 1} через {wait_time} сек...")
+                await asyncio.sleep(wait_time)
+            else:
+                print(f"❌ Не удалось отправить новость после {max_retries} попыток: {e}")
+        except Exception as e:
+            print(f"❌ Критическая ошибка в send_news_to_admin: {e}")
+            break
 
 # Подтверждение новости
 @dp.callback_query(F.data.startswith("approve|"))

@@ -66,14 +66,14 @@ def extract_title_and_body(text: str):
 
     # Очищаем и ограничиваем заголовок
     title = re.sub(r'\s+', ' ', title)  # Заменяем множественные пробелы на один
-    title = title[:255]  # Ограничиваем длину
+    title = title[:80]  # Оптимальная длина для заголовка
 
     # Очищаем тело текста
     body = re.sub(r'\s+', ' ', body)  # Заменяем множественные пробелы на один
 
-    print(f"📄 Извлечен заголовок: {title}")
+    print(f"📄 Извлечен заголовок ({len(title)} символов): {title}")
     print(f"📄 Извлечен текст: {len(body)} символов")
-    print(f"📄 Подзаголовок (первые 100 символов): {body[:100]}...")
+    print(f"📄 Подзаголовок ({len(body[:120])} символов): {body[:120]}...")
 
     return title, body
 
@@ -132,7 +132,7 @@ def get_csrf_token_for_create() -> str:
 
 
 def post_news_to_site_simple(news_text: str, image_path: str = None) -> bool:
-    """Исправленная версия с подзаголовком и изображениями"""
+    """Исправленная версия с оптимизированной длиной полей"""
     if not login_to_site():
         return False
 
@@ -146,13 +146,31 @@ def post_news_to_site_simple(news_text: str, image_path: str = None) -> bool:
     print("🔄 Используем правильный формат для ВСЕХ translatable полей Voyager...")
     print(f"📝 Отправляем данные на: {create_url}")
 
-    # Создаем подзаголовок из первых 100 символов текста
-    subtitle = body[:100] + "..." if len(body) > 100 else body
+    # ОПТИМАЛЬНЫЕ ДЛИНЫ ДЛЯ ПОЛЕЙ VOYAGER:
+    # - Заголовок: 60-80 символов (обычно ограничение 255)
+    title = title[:80]  # Безопасное ограничение
 
-    # Генерируем SEO поля на основе заголовка и текста
-    seo_title = title[:60]  # Ограничиваем для SEO
-    seo_description = body[:160] if body else title[:160]  # Ограничиваем для SEO
-    seo_keywords = "агро, сельское хозяйство, новости, АПК"  # Базовые ключевые слова
+    # - Подзаголовок: 120-150 символов (чтобы избежать обрезки)
+    subtitle = body[:120].strip()
+    if len(body) > 120:
+        subtitle += "..."
+
+    # - SEO заголовок: 50-60 символов (рекомендации Google)
+    seo_title = title[:55]  # Google показывает ~50-60 символов
+
+    # - SEO описание: 150-160 символов (рекомендации Google)
+    seo_description = body[:155].strip()
+    if len(body) > 155:
+        seo_description += "..."
+
+    # - SEO ключевые слова: до 255 символов
+    seo_keywords = "агро, сельское хозяйство, АПК, новости сельского хозяйства"
+
+    print(f"📊 Оптимизированные длины полей:")
+    print(f"  - Заголовок: {len(title)} символов")
+    print(f"  - Подзаголовок: {len(subtitle)} символов")
+    print(f"  - SEO заголовок: {len(seo_title)} символов")
+    print(f"  - SEO описание: {len(seo_description)} символов")
 
     # ПРАВИЛЬНЫЙ формат для ВСЕХ translatable полей в Voyager
     data = {
@@ -169,7 +187,7 @@ def post_news_to_site_simple(news_text: str, image_path: str = None) -> bool:
 
         # Также отправляем обычные поля
         "title": title,
-        "subtitle": subtitle,  # Добавляем подзаголовок
+        "subtitle": subtitle,
         "description": body,
         "seo_title": seo_title,
         "seo_description": seo_description,
@@ -191,30 +209,15 @@ def post_news_to_site_simple(news_text: str, image_path: str = None) -> bool:
     files = {}
     if image_path and os.path.exists(image_path):
         try:
-            # Пробуем разные варианты для основного изображения
-            print("🖼️ Пробуем разные варианты загрузки изображений:")
+            print("🖼️ Загружаем изображения:")
 
-            # Вариант 1: Основное изображение как файл
+            # Основное изображение
             files["image"] = open(image_path, "rb")
-            print("  ✅ image (как файл)")
+            print("  ✅ image")
 
-            # Вариант 2: image_uri как файл
-            files["image_uri"] = open(image_path, "rb")
-            print("  ✅ image_uri (как файл)")
-
-            # Вариант 3: SEO изображение (уже работает)
+            # SEO изображение
             files["seo_image"] = open(image_path, "rb")
-            print("  ✅ seo_image (как файл)")
-
-            # Вариант 4: Пробуем отправить image как base64 в data
-            try:
-                import base64
-                with open(image_path, "rb") as img_file:
-                    image_base64 = base64.b64encode(img_file.read()).decode('utf-8')
-                data["image"] = f"data:image/png;base64,{image_base64}"
-                print("  ✅ image (как base64 в data)")
-            except Exception as e:
-                print(f"  ❌ image (base64): {e}")
+            print("  ✅ seo_image")
 
         except Exception as e:
             print(f"⚠️ Не удалось открыть изображение: {e}")
@@ -232,28 +235,13 @@ def post_news_to_site_simple(news_text: str, image_path: str = None) -> bool:
 
         if response.status_code == 500:
             print("❌ Ошибка 500 - внутренняя ошибка сервера")
-
-            # Сохраняем детальную информацию об ошибке
-            error_content = response.text
-            with open("error_detailed.html", "w", encoding="utf-8") as f:
-                f.write(error_content)
-
-            # Анализируем ошибку
-            if "image" in error_content.lower():
-                print("🔍 Проблема с полем image!")
-                # Пробуем альтернативный метод без image
-                return post_news_to_site_without_image(news_text)
-
             return False
 
         if response.status_code in (200, 302):
             if response.status_code == 302:
                 location = response.headers.get('Location', '')
                 if 'admin/news' in location or 'success' in location.lower():
-                    print("✅ Новость успешно создана (редирект на список новостей)!")
-                    return True
-                else:
-                    print(f"⚠️ Редирект на: {location}")
+                    print("✅ Новость успешно создана!")
                     return True
 
             # Проверяем успешность по содержимому
@@ -839,3 +827,52 @@ def test_image_field_only():
     except Exception as e:
         print(f"❌ Ошибка теста image: {e}")
         return False
+
+
+def analyze_field_limits():
+    """Анализирует возможные ограничения полей в базе данных"""
+    if not login_to_site():
+        return
+
+    create_url = f"{SITE_URL}/admin/news/create"
+    try:
+        resp = session.get(create_url)
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        print("🔍 Анализ ограничений полей:")
+        print("=" * 50)
+
+        # Ищем поля с атрибутами maxlength
+        fields_with_limits = []
+
+        # Input поля
+        inputs = soup.find_all('input')
+        for inp in inputs:
+            maxlength = inp.get('maxlength')
+            if maxlength:
+                name = inp.get('name', 'без имени')
+                fields_with_limits.append((name, maxlength, 'input'))
+
+        # Textarea поля
+        textareas = soup.find_all('textarea')
+        for ta in textareas:
+            maxlength = ta.get('maxlength')
+            if maxlength:
+                name = ta.get('name', 'без имени')
+                fields_with_limits.append((name, maxlength, 'textarea'))
+
+        print(f"📋 Поля с ограничениями длины: {len(fields_with_limits)}")
+        for field_name, limit, field_type in fields_with_limits:
+            print(f"  - {field_name}: {limit} символов (тип: {field_type})")
+
+        # Если нет явных ограничений, предполагаем стандартные
+        if not fields_with_limits:
+            print("ℹ️ Явных ограничений не найдено, используем стандартные:")
+            print("  - title: 255 символов")
+            print("  - subtitle: 255 символов")
+            print("  - seo_title: 255 символов")
+            print("  - seo_description: 255 символов")
+            print("  - seo_keywords: 255 символов")
+
+    except Exception as e:
+        print(f"❌ Ошибка анализа ограничений: {e}")
