@@ -6,8 +6,7 @@ import html
 from bs4 import BeautifulSoup
 from config import DEEPSEEK_KEY
 from database import get_sites, is_news_sent, is_news_published, mark_news_sent, add_to_queue, clear_stuck_processing, \
-    get_next_from_queue, mark_queue_processed, get_queue_size
-from bot import send_original_news_to_admin
+    get_next_from_queue, mark_queue_processed, get_queue_size, update_news_with_deepseek, mark_no_deepseek_needed
 
 
 # Парсинг полного текста статьи
@@ -157,10 +156,8 @@ def download_image(url: str) -> str:
 # Обработка через DeepSeek
 def paraphrase_with_deepseek(title: str, text: str) -> str:
     try:
-        import requests
-
         headers = {
-            "Authorization": f"Bearer {DEEPSEK_KEY}",
+            "Authorization": f"Bearer {DEEPSEEK_KEY}",
             "Content-Type": "application/json"
         }
 
@@ -283,6 +280,13 @@ async def parse_feed_and_process(url: str, limit: int = 5) -> int:
                 image_path = ""
                 if image_url:
                     image_path = download_image(image_url)
+                else:
+                    # Используем случайное изображение из папки images
+                    import os
+                    if os.path.exists("images") and os.listdir("images"):
+                        image_files = [f for f in os.listdir("images") if f.endswith(('.jpg', '.png', '.jpeg'))]
+                        if image_files:
+                            image_path = os.path.join("images", random.choice(image_files))
 
                 # Добавляем в очередь обработки
                 await add_to_queue(
@@ -326,6 +330,7 @@ async def process_next_from_queue() -> bool:
         print(f"📨 Обрабатываем новость из очереди: {title[:50]}...")
 
         # Отправляем оригинальную новость на первичную модерацию
+        from bot import send_original_news_to_admin
         await send_original_news_to_admin(
             original_title=original_title,
             original_text=original_text,
@@ -395,3 +400,7 @@ async def periodic_rss_check():
 
     except Exception as e:
         print(f"❌ Ошибка в periodic_rss_check: {e}")
+
+
+# Нужно добавить импорт random для использования в download_image
+import random

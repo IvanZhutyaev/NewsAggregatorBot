@@ -1,6 +1,5 @@
 import asyncio
-import time
-from aiogram import Bot, Dispatcher
+from aiogram import Bot
 from config import BOT_TOKEN
 from bot import dp, on_startup
 from parser import periodic_rss_check, process_queue_automatically

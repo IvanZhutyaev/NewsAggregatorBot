@@ -11,7 +11,6 @@ from config import BOT_TOKEN, CHANNEL_ID, ADMINS
 from database import init_db, add_site, remove_site, get_sites, is_news_sent, mark_news_sent, mark_news_published, \
     get_queue_size, clear_stuck_processing, update_news_with_deepseek, mark_no_deepseek_needed
 from site_poster import post_news_to_site
-from parser import paraphrase_with_deepseek
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -145,6 +144,9 @@ async def process_with_deepseek(callback: types.CallbackQuery):
         return
 
     try:
+        # Импортируем здесь чтобы избежать циклического импорта
+        from parser import paraphrase_with_deepseek
+
         # Обрабатываем через DeepSeek
         processed_text = paraphrase_with_deepseek(data["original_title"], data["original_text"])
 
@@ -630,5 +632,4 @@ async def initialize():
 # Запуск инициализации
 async def on_startup():
     await initialize()
-
 
