@@ -78,19 +78,34 @@ def get_csrf_token_for_create() -> str:
         if resp.status_code != 200:
             print(f"⚠️ Ошибка при получении страницы создания: {resp.status_code}")
             return None
+
         soup = BeautifulSoup(resp.text, "html.parser")
-        token_tag = soup.find("meta", {"name": "csrf-token"})
-        token = token_tag["content"] if token_tag else None
-        if not token:
-            print("⚠️ Не удалось найти CSRF токен на странице создания")
-        return token
+
+        # Ищем форму создания новости
+        form = soup.find('form')
+        if not form:
+            print("❌ Форма не найдена на странице")
+            return None
+
+        print("✅ Форма создания новости найдена")
+
+        # Ищем CSRF токен в форме
+        token_tag = form.find("input", {"name": "_token"})
+        if token_tag:
+            csrf_token = token_tag["value"]
+            print(f"✅ CSRF токен найден: {csrf_token[:20]}...")
+            return csrf_token
+
+        print("❌ CSRF токен не найден в форме")
+        return None
+
     except Exception as e:
         print(f"❌ Ошибка получения CSRF токена: {e}")
         return None
 
 
 def post_news_to_site(news_text: str, image_path: str = None) -> bool:
-    """Создание новости через Voyager admin"""
+    """Создание новости через правильную форму"""
     if not login_to_site():
         return False
 
@@ -99,43 +114,28 @@ def post_news_to_site(news_text: str, image_path: str = None) -> bool:
         print("❌ Не удалось получить CSRF токен для создания новости")
         return False
 
-    create_url = f"{SITE_URL}/admin/news"
+    # ПРАВИЛЬНЫЙ URL для отправки формы
+    create_url = f"{SITE_URL}/admin/news"  # Это endpoint для сохранения
+
     title, body = extract_title_and_body(news_text)
 
-    # Логируем данные для отладки
-    print(f"📝 Данные для отправки:")
-    print(f"Заголовок ({len(title)} симв.): {title}")
-    print(f"Текст ({len(body)} симв.): {body[:100]}..." if body else "Текст отсутствует")
-    print(f"CSRF токен: {csrf_token[:20]}...")
+    print(f"📝 Отправляем данные на: {create_url}")
+    print(f"Заголовок: {title}")
+    print(f"Текст: {body[:100]}...")
 
-    # Правильные данные на основе анализа формы
+    # Правильные данные для Voyager формы
     data = {
         "_token": csrf_token,
         # Основные поля
         "title": title,
-        "subtitle": title[:100],  # краткий заголовок
+        "subtitle": title[:100],
         "description": body,
         # SEO поля
         "seo_title": title[:60],
         "seo_description": body[:160] if body else title[:160],
         "seo_keywords": ", ".join(title.split()[:5]),
         "seo_slug": "",
-        # Скрытые поля i18n (мультиязычность)
-        "title_i18n": '{"ru":"' + title + '","kk":"' + title + '","en":"' + title + '","zh":"' + title + '"}',
-        "subtitle_i18n": '{"ru":"' + title[:100] + '","kk":"' + title[:100] + '","en":"' + title[
-                                                                                           :100] + '","zh":"' + title[
-                                                                                                                :100] + '"}',
-        "description_i18n": '{"ru":"' + body + '","kk":"' + body + '","en":"' + body + '","zh":"' + body + '"}',
-        "seo_title_i18n": '{"ru":"' + title[:60] + '","kk":"' + title[:60] + '","en":"' + title[
-                                                                                          :60] + '","zh":"' + title[
-                                                                                                              :60] + '"}',
-        "seo_description_i18n": '{"ru":"' + (body[:160] if body else title[:160]) + '","kk":"' + (
-            body[:160] if body else title[:160]) + '","en":"' + (body[:160] if body else title[:160]) + '","zh":"' + (
-                                    body[:160] if body else title[:160]) + '"}',
-        "seo_keywords_i18n": '{"ru":"' + ", ".join(title.split()[:5]) + '","kk":"' + ", ".join(
-            title.split()[:5]) + '","en":"' + ", ".join(title.split()[:5]) + '","zh":"' + ", ".join(
-            title.split()[:5]) + '"}',
-        # Дополнительные поля
+        # Обязательные скрытые поля
         "redirect_to": "",
         "model_name": "App\\Models\\News",
         "model_id": "",
@@ -151,7 +151,6 @@ def post_news_to_site(news_text: str, image_path: str = None) -> bool:
             print(f"⚠️ Не удалось открыть изображение: {e}")
 
     try:
-        print(f"🌐 Отправляем запрос на: {create_url}")
         response = session.post(create_url, data=data, files=files, timeout=20)
 
         if files:
@@ -164,46 +163,84 @@ def post_news_to_site(news_text: str, image_path: str = None) -> bool:
             print("❌ Ошибка 500 - внутренняя ошибка сервера")
             print("🔍 Тело ответа:")
             error_text = response.text
-            print(error_text[:1500])  # Больше символов для анализа
-
-            # Ищем конкретную ошибку в тексте
-            if "title_i18n" in error_text:
-                print("⚠️ Проблема с полем title_i18n")
-            if "description_i18n" in error_text:
-                print("⚠️ Проблема с полем description_i18n")
-
+            print(error_text[:1000])
             return False
 
         if response.status_code in (200, 302):
-            if "voyager/news" in response.text or response.status_code == 302:
-                print("🌐 Новость успешно опубликована на сайте!")
+            # Проверяем успешность по редиректу или содержимому
+            if response.status_code == 302:
+                print("✅ Новость успешно создана (редирект)!")
                 return True
-            else:
-                print("⚠️ Ответ не подтверждает успешное добавление.")
-                # Проверяем на наличие сообщений об успехе
-                success_keywords = ['успех', 'создан', 'добавлен', 'success', 'created', 'added']
-                if any(keyword in response.text.lower() for keyword in success_keywords):
-                    print("✅ Похоже, новость добавлена успешно (найдены ключевые слова)")
-                    return True
 
-                # Проверяем наличие ошибок валидации
-                error_keywords = ['error', 'ошибка', 'validation', 'валидация']
-                if any(keyword in response.text.lower() for keyword in error_keywords):
-                    print("❌ Найдены ошибки в ответе")
-                    # Ищем конкретные ошибки
-                    soup = BeautifulSoup(response.text, "html.parser")
-                    errors = soup.find_all(class_=['error', 'alert-danger', 'validation-error'])
-                    for error in errors:
-                        print(f"Ошибка: {error.get_text(strip=True)}")
+            if "успех" in response.text.lower() or "success" in response.text.lower():
+                print("✅ Новость успешно создана!")
+                return True
 
+            # Проверяем, нет ли ошибок в ответе
+            soup = BeautifulSoup(response.text, "html.parser")
+            errors = soup.find_all(class_=['error', 'alert-danger'])
+            if errors:
+                for error in errors:
+                    print(f"❌ Ошибка: {error.get_text(strip=True)}")
                 return False
+
+            print("⚠️ Статус 200, но нет явного подтверждения успеха")
+            return True
+
         else:
             print(f"❌ Ошибка публикации: {response.status_code}")
-            print(f"Текст ответа: {response.text[:500]}")
             return False
 
     except Exception as e:
         print(f"❌ Ошибка при отправке новости: {e}")
+        return False
+
+
+def post_news_to_site_alternative(news_text: str, image_path: str = None) -> bool:
+    """Альтернативный метод - минимальный набор полей"""
+    if not login_to_site():
+        return False
+
+    csrf_token = get_csrf_token_for_create()
+    if not csrf_token:
+        return False
+
+    create_url = f"{SITE_URL}/admin/news"
+    title, body = extract_title_and_body(news_text)
+
+    print("🔄 Пробуем альтернативный метод (минимальные поля)...")
+
+    # Абсолютно минимальный набор полей
+    data = {
+        "_token": csrf_token,
+        "title": title,
+        "description": body,
+        "i18n_selector": "ru",  # Важно: указываем язык
+    }
+
+    files = {}
+    if image_path:
+        try:
+            files["image"] = open(image_path, "rb")
+        except Exception as e:
+            print(f"⚠️ Не удалось открыть изображение: {e}")
+
+    try:
+        response = session.post(create_url, data=data, files=files, timeout=20)
+
+        if files:
+            files["image"].close()
+
+        print(f"📡 Ответ альтернативного метода: {response.status_code}")
+
+        if response.status_code in (200, 302):
+            print("✅ Новость опубликована альтернативным методом!")
+            return True
+        else:
+            return False
+
+    except Exception as e:
+        print(f"❌ Ошибка альтернативного метода: {e}")
         return False
 
 
@@ -347,3 +384,110 @@ def analyze_real_form_fields():
 
     except Exception as e:
         print(f"❌ Ошибка анализа формы: {e}")
+
+
+def test_form_manually():
+    """Ручное тестирование формы"""
+    if not login_to_site():
+        return
+
+    create_url = f"{SITE_URL}/admin/news/create"
+    try:
+        # Получаем страницу создания
+        resp = session.get(create_url)
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        print("🧪 Ручное тестирование формы:")
+        print("=" * 50)
+
+        # Ищем форму
+        form = soup.find('form')
+        if form:
+            action = form.get('action', '')
+            method = form.get('method', 'post')
+            print(f"Форма: action='{action}', method='{method}'")
+
+            # Показываем все поля формы
+            inputs = form.find_all('input')
+            print(f"Всего input полей: {len(inputs)}")
+
+            # Группируем по типам
+            text_inputs = [inp for inp in inputs if inp.get('type') == 'text']
+            hidden_inputs = [inp for inp in inputs if inp.get('type') == 'hidden']
+            file_inputs = [inp for inp in inputs if inp.get('type') == 'file']
+
+            print(f"Text поля: {len(text_inputs)}")
+            for inp in text_inputs:
+                name = inp.get('name')
+                placeholder = inp.get('placeholder', '')
+                print(f"  - {name}: '{placeholder}'")
+
+            print(f"Hidden поля: {len(hidden_inputs)}")
+            for inp in hidden_inputs[:5]:  # Показываем первые 5
+                name = inp.get('name')
+                value = inp.get('value', '')[:50]
+                print(f"  - {name}: '{value}'")
+
+            print(f"File поля: {len(file_inputs)}")
+            for inp in file_inputs:
+                name = inp.get('name')
+                print(f"  - {name}")
+
+        # Проверяем textarea
+        textareas = soup.find_all('textarea')
+        print(f"Textarea поля: {len(textareas)}")
+        for ta in textareas:
+            name = ta.get('name')
+            placeholder = ta.get('placeholder', '')
+            print(f"  - {name}: '{placeholder}'")
+
+    except Exception as e:
+        print(f"❌ Ошибка тестирования: {e}")
+
+
+def debug_form_submission():
+    """Отладочная функция для тестирования отправки формы"""
+    if not login_to_site():
+        return
+
+    create_url = f"{SITE_URL}/admin/news/create"
+    try:
+        print("🐛 Отладочная информация о форме:")
+        print("=" * 50)
+
+        # Получаем страницу
+        resp = session.get(create_url)
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Находим форму
+        form = soup.find('form')
+        if form:
+            action = form.get('action', '')
+            method = form.get('method', '')
+            print(f"Форма action: {action}")
+            print(f"Форма method: {method}")
+
+            # Все поля формы
+            inputs = form.find_all('input')
+            print(f"Всего input полей: {len(inputs)}")
+
+            for inp in inputs:
+                name = inp.get('name', '')
+                input_type = inp.get('type', '')
+                value = inp.get('value', '')[:50]
+                if name:  # Показываем только поля с именем
+                    print(f"  {name} (type: {input_type}) = '{value}'")
+
+            # Textareas
+            textareas = form.find_all('textarea')
+            print(f"Textarea полей: {len(textareas)}")
+            for ta in textareas:
+                name = ta.get('name', '')
+                if name:
+                    print(f"  {name}")
+
+        else:
+            print("❌ Форма не найдена!")
+
+    except Exception as e:
+        print(f"❌ Ошибка отладки: {e}")

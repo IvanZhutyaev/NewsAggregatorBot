@@ -7,10 +7,12 @@ async def main():
     print("🤖 Бот запускается...")
 
     # Запускаем фоновую задачу парсера
-    from site_poster import analyze_create_form, check_required_fields,analyze_real_form_fields
+    from site_poster import analyze_create_form, check_required_fields,analyze_real_form_fields,test_form_manually, debug_form_submission
     analyze_create_form()
     check_required_fields()
     analyze_real_form_fields()
+    test_form_manually()
+    debug_form_submission()
     asyncio.create_task(scheduler())
 
     while True:
