@@ -13,7 +13,8 @@ async def main():
     # Настройка логирования
     logging.basicConfig(level=logging.INFO)
     site_poster.debug_form_submission_detailed()
-    site_poster.analyze_image_upload()  # Добавьте эту строку
+    site_poster.analyze_image_upload()
+    site_poster.test_image_field_only()  # Добавьте эту строку
 
     site_poster.find_correct_form_endpoint()
     site_poster.debug_current_form()

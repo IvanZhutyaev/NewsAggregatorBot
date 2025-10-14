@@ -191,13 +191,30 @@ def post_news_to_site_simple(news_text: str, image_path: str = None) -> bool:
     files = {}
     if image_path and os.path.exists(image_path):
         try:
-            # Основное изображение
-            files["image"] = open(image_path, "rb")
-            print(f"🖼️ Основное изображение: {image_path}")
+            # Пробуем разные варианты для основного изображения
+            print("🖼️ Пробуем разные варианты загрузки изображений:")
 
-            # SEO изображение (может быть тем же самым)
+            # Вариант 1: Основное изображение как файл
+            files["image"] = open(image_path, "rb")
+            print("  ✅ image (как файл)")
+
+            # Вариант 2: image_uri как файл
+            files["image_uri"] = open(image_path, "rb")
+            print("  ✅ image_uri (как файл)")
+
+            # Вариант 3: SEO изображение (уже работает)
             files["seo_image"] = open(image_path, "rb")
-            print(f"🔍 SEO изображение: {image_path}")
+            print("  ✅ seo_image (как файл)")
+
+            # Вариант 4: Пробуем отправить image как base64 в data
+            try:
+                import base64
+                with open(image_path, "rb") as img_file:
+                    image_base64 = base64.b64encode(img_file.read()).decode('utf-8')
+                data["image"] = f"data:image/png;base64,{image_base64}"
+                print("  ✅ image (как base64 в data)")
+            except Exception as e:
+                print(f"  ❌ image (base64): {e}")
 
         except Exception as e:
             print(f"⚠️ Не удалось открыть изображение: {e}")
@@ -222,8 +239,10 @@ def post_news_to_site_simple(news_text: str, image_path: str = None) -> bool:
                 f.write(error_content)
 
             # Анализируем ошибку
-            if "Invalid Translatable field" in error_content:
-                print("🔍 Проблема с translatable полями!")
+            if "image" in error_content.lower():
+                print("🔍 Проблема с полем image!")
+                # Пробуем альтернативный метод без image
+                return post_news_to_site_without_image(news_text)
 
             return False
 
@@ -258,6 +277,7 @@ def post_news_to_site_simple(news_text: str, image_path: str = None) -> bool:
     except Exception as e:
         print(f"❌ Ошибка при отправке новости: {e}")
         return False
+
 def post_news_to_site(news_text: str, image_path: str = None) -> bool:
     """Основная функция публикации новости"""
     return post_news_to_site_simple(news_text, image_path)
@@ -766,3 +786,56 @@ def analyze_image_upload():
 
     except Exception as e:
         print(f"❌ Ошибка анализа полей изображений: {e}")
+
+
+def test_image_field_only():
+    """Тестирует только поле image"""
+    if not login_to_site():
+        return False
+
+    csrf_token = get_csrf_token_for_create()
+    if not csrf_token:
+        return False
+
+    create_url = f"{SITE_URL}/admin/news"
+
+    # Минимальные данные
+    data = {
+        "_token": csrf_token,
+        "i18n_selector": "ru",
+        "title_i18n": json.dumps({"ru": "Тест изображения", "kk": "", "en": "", "zh": ""}),
+        "description_i18n": json.dumps({"ru": "Тестовое описание", "kk": "", "en": "", "zh": ""}),
+        "title": "Тест изображения",
+        "description": "Тестовое описание",
+    }
+
+    files = {}
+    image_path = "images/Copilot_20251006_074844.png"  # Используйте существующее изображение
+
+    if os.path.exists(image_path):
+        try:
+            # Тестируем только поле image
+            files["image"] = open(image_path, "rb")
+            print("🧪 Тестируем только поле image...")
+        except Exception as e:
+            print(f"❌ Ошибка открытия изображения: {e}")
+            return False
+
+    try:
+        response = session.post(create_url, data=data, files=files, timeout=30)
+
+        if files:
+            files["image"].close()
+
+        print(f"📡 Ответ теста image: {response.status_code}")
+
+        if response.status_code in (200, 302):
+            print("✅ Тест image пройден!")
+            return True
+        else:
+            print("❌ Тест image не пройден")
+            return False
+
+    except Exception as e:
+        print(f"❌ Ошибка теста image: {e}")
+        return False
