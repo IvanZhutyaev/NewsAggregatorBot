@@ -108,66 +108,97 @@ def post_news_to_site(news_text: str, image_path: str = None) -> bool:
     print(f"Текст ({len(body)} симв.): {body[:100]}..." if body else "Текст отсутствует")
     print(f"CSRF токен: {csrf_token[:20]}...")
 
-    # Подготавливаем данные - только необходимые поля
-    data = {
-        "_token": csrf_token,
-        "title_ru": title,
-        "subtitle_ru": title[:100],  # краткий заголовок
-        "description_ru": body,
-        "seo_title_ru": title[:60],
-        "seo_description_ru": body[:160] if body else title[:160],
-        "seo_keywords_ru": ", ".join(title.split()[:5]),
-        "seo_url": "",
-        # Возможно нужны дополнительные поля:
-        # "category_id": "1",
-        # "status": "PUBLISHED",
-        # "author_id": "1",
-    }
+    # Пробуем разные варианты полей
+    data_variants = [
+        # Вариант 1: Только базовые поля
+        {
+            "_token": csrf_token,
+            "title": title,
+            "body": body,
+        },
+        # Вариант 2: С русскими полями
+        {
+            "_token": csrf_token,
+            "title_ru": title,
+            "body_ru": body,
+        },
+        # Вариант 3: Полный набор полей
+        {
+            "_token": csrf_token,
+            "title": title,
+            "title_ru": title,
+            "title_en": title,
+            "title_kk": title,
+            "body": body,
+            "body_ru": body,
+            "body_en": body,
+            "body_kk": body,
+            "excerpt": body[:200] if body else title[:200],
+            "slug": "",
+            "status": "PUBLISHED",
+            "category_id": "1",
+            "author_id": "1",
+        },
+        # Вариант 4: Альтернативные названия полей
+        {
+            "_token": csrf_token,
+            "name": title,
+            "name_ru": title,
+            "content": body,
+            "content_ru": body,
+            "description": body,
+            "description_ru": body,
+        }
+    ]
 
-    # Сначала попробуем без изображения
     files = {}
-    # if image_path:
-    #     try:
-    #         files["image"] = open(image_path, "rb")
-    #         print(f"🖼️ Изображение: {image_path}")
-    #     except Exception as e:
-    #         print(f"⚠️ Не удалось открыть изображение: {e}")
+    if image_path:
+        try:
+            files["image"] = open(image_path, "rb")
+            print(f"🖼️ Изображение: {image_path}")
+        except Exception as e:
+            print(f"⚠️ Не удалось открыть изображение: {e}")
 
-    try:
-        print(f"🌐 Отправляем запрос на: {create_url}")
-        response = session.post(create_url, data=data, files=files, timeout=20)
+    # Пробуем все варианты данных
+    for i, data in enumerate(data_variants, 1):
+        print(f"🔧 Пробуем вариант {i}/4...")
 
-        if files:
-            files["image"].close()
+        try:
+            print(f"🌐 Отправляем запрос на: {create_url}")
+            response = session.post(create_url, data=data, files=files, timeout=20)
 
-        print(f"📡 Ответ сервера: {response.status_code}")
+            print(f"📡 Ответ сервера: {response.status_code}")
 
-        # Детальный анализ ответа
-        if response.status_code == 500:
-            print("❌ Ошибка 500 - внутренняя ошибка сервера")
-            print("🔍 Тело ответа:")
-            print(response.text[:1000])  # Больше символов для анализа
-            return False
-
-        if response.status_code in (200, 302):
-            if "voyager/news" in response.text or response.status_code == 302:
-                print("🌐 Новость успешно опубликована на сайте!")
-                return True
-            else:
-                print("⚠️ Ответ не подтверждает успешное добавление.")
-                # Проверяем на наличие сообщений об успехе
-                if "успешно" in response.text.lower() or "success" in response.text.lower():
-                    print("✅ Похоже, новость добавлена успешно (найдены ключевые слова)")
+            if response.status_code == 200:
+                # Проверяем успешность по содержимому ответа
+                if any(keyword in response.text.lower() for keyword in ['success', 'успех', 'создан', 'добавлен']):
+                    print(f"✅ Новость успешно опубликована (вариант {i})!")
+                    if files:
+                        files["image"].close()
                     return True
-                return False
-        else:
-            print(f"❌ Ошибка публикации: {response.status_code}")
-            print(f"Текст ответа: {response.text[:500]}")
-            return False
+                else:
+                    print(f"⚠️ Ответ 200, но нет подтверждения успеха (вариант {i})")
+            elif response.status_code == 302:
+                print(f"✅ Новость опубликована (редирект) (вариант {i})!")
+                if files:
+                    files["image"].close()
+                return True
+            elif response.status_code == 500:
+                print(f"❌ Ошибка 500 с вариантом {i}")
+                # Продолжаем пробовать следующий вариант
+                continue
+            else:
+                print(f"❌ Ошибка {response.status_code} с вариантом {i}")
 
-    except Exception as e:
-        print(f"❌ Ошибка при отправке новости: {e}")
-        return False
+        except Exception as e:
+            print(f"❌ Ошибка при отправке (вариант {i}): {e}")
+            continue
+
+    if files:
+        files["image"].close()
+
+    print("❌ Все варианты данных не сработали")
+    return False
 
 
 def analyze_create_form():
@@ -250,3 +281,63 @@ def check_required_fields():
     except Exception as e:
         print(f"❌ Ошибка проверки полей: {e}")
         return []
+
+
+def analyze_real_form_fields():
+    """Анализирует реальные поля формы через JavaScript или HTML"""
+    if not login_to_site():
+        return
+
+    create_url = f"{SITE_URL}/admin/news/create"
+    try:
+        resp = session.get(create_url, timeout=10)
+
+        print("🔍 Детальный анализ формы:")
+        print("=" * 50)
+
+        # Ищем все возможные поля ввода
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Все input элементы
+        print("📋 INPUT поля:")
+        inputs = soup.find_all('input')
+        for inp in inputs:
+            name = inp.get('name', 'без имени')
+            input_type = inp.get('type', 'text')
+            value = inp.get('value', '')
+            placeholder = inp.get('placeholder', '')
+            print(f"  - name: '{name}', type: '{input_type}', value: '{value}', placeholder: '{placeholder}'")
+
+        # Все textarea элементы
+        print("\n📋 TEXTAREA поля:")
+        textareas = soup.find_all('textarea')
+        for ta in textareas:
+            name = ta.get('name', 'без имени')
+            placeholder = ta.get('placeholder', '')
+            print(f"  - name: '{name}', placeholder: '{placeholder}'")
+
+        # Все select элементы
+        print("\n📋 SELECT поля:")
+        selects = soup.find_all('select')
+        for sel in selects:
+            name = sel.get('name', 'без имени')
+            options = sel.find_all('option')
+            print(f"  - name: '{name}', options: {len(options)}")
+            for opt in options[:3]:  # Показываем первые 3 опции
+                print(f"    * {opt.get('value', '')} - {opt.text}")
+
+        # Ищем JavaScript переменные с настройками
+        print("\n🔍 JavaScript данные:")
+        scripts = soup.find_all('script')
+        for script in scripts:
+            if script.string:
+                js_content = script.string
+                # Ищем упоминания полей в JS
+                if any(field in js_content for field in ['title', 'body', 'content', 'description']):
+                    lines = js_content.split('\n')
+                    for line in lines[:10]:  # Первые 10 строк
+                        if any(field in line for field in ['title', 'body', 'content', 'description']):
+                            print(f"  JS: {line.strip()}")
+
+    except Exception as e:
+        print(f"❌ Ошибка анализа формы: {e}")
