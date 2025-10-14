@@ -114,27 +114,37 @@ def post_news_to_site(news_text: str, image_path: str = None) -> bool:
         print("❌ Не удалось получить CSRF токен для создания новости")
         return False
 
-    # ПРАВИЛЬНЫЙ URL для отправки формы
-    create_url = f"{SITE_URL}/admin/news"  # Это endpoint для сохранения
-
+    create_url = f"{SITE_URL}/admin/news"
     title, body = extract_title_and_body(news_text)
 
     print(f"📝 Отправляем данные на: {create_url}")
     print(f"Заголовок: {title}")
     print(f"Текст: {body[:100]}...")
 
-    # Правильные данные для Voyager формы
+    # Правильные данные для Voyager с мультиязычной поддержкой
     data = {
         "_token": csrf_token,
-        # Основные поля
+        "i18n_selector": "ru",  # Выбираем русский язык
+
+        # Основные поля (русская версия)
         "title": title,
+        "title_i18n": '{"ru":"' + title.replace('"', '\\"') + '","kk":null,"en":null,"zh":null}',
         "subtitle": title[:100],
+        "subtitle_i18n": '{"ru":"' + title[:100].replace('"', '\\"') + '","kk":null,"en":null,"zh":null}',
         "description": body,
+        "description_i18n": '{"ru":"' + body.replace('"', '\\"') + '","kk":null,"en":null,"zh":null}',
+
         # SEO поля
         "seo_title": title[:60],
+        "seo_title_i18n": '{"ru":"' + title[:60].replace('"', '\\"') + '","kk":null,"en":null,"zh":null}',
         "seo_description": body[:160] if body else title[:160],
+        "seo_description_i18n": '{"ru":"' + (body[:160] if body else title[:160]).replace('"',
+                                                                                          '\\"') + '","kk":null,"en":null,"zh":null}',
         "seo_keywords": ", ".join(title.split()[:5]),
+        "seo_keywords_i18n": '{"ru":"' + ", ".join(title.split()[:5]).replace('"',
+                                                                              '\\"') + '","kk":null,"en":null,"zh":null}',
         "seo_slug": "",
+
         # Обязательные скрытые поля
         "redirect_to": "",
         "model_name": "App\\Models\\News",
@@ -158,16 +168,15 @@ def post_news_to_site(news_text: str, image_path: str = None) -> bool:
 
         print(f"📡 Ответ сервера: {response.status_code}")
 
-        # Детальный анализ ответа
         if response.status_code == 500:
             print("❌ Ошибка 500 - внутренняя ошибка сервера")
-            print("🔍 Тело ответа:")
-            error_text = response.text
-            print(error_text[:1000])
+            # Сохраняем ошибку в файл для отладки
+            with open("error_debug.html", "w", encoding="utf-8") as f:
+                f.write(response.text)
+            print("🔍 Сохранен полный ответ в error_debug.html")
             return False
 
         if response.status_code in (200, 302):
-            # Проверяем успешность по редиректу или содержимому
             if response.status_code == 302:
                 print("✅ Новость успешно создана (редирект)!")
                 return True
@@ -176,7 +185,7 @@ def post_news_to_site(news_text: str, image_path: str = None) -> bool:
                 print("✅ Новость успешно создана!")
                 return True
 
-            # Проверяем, нет ли ошибок в ответе
+            # Проверяем наличие ошибок
             soup = BeautifulSoup(response.text, "html.parser")
             errors = soup.find_all(class_=['error', 'alert-danger'])
             if errors:
@@ -186,7 +195,6 @@ def post_news_to_site(news_text: str, image_path: str = None) -> bool:
 
             print("⚠️ Статус 200, но нет явного подтверждения успеха")
             return True
-
         else:
             print(f"❌ Ошибка публикации: {response.status_code}")
             return False

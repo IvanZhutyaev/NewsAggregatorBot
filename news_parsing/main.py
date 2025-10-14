@@ -1,11 +1,11 @@
 import asyncio
 from bot import dp, bot
 from parser import scheduler
-
+import logging
 
 async def main():
     print("🤖 Бот запускается...")
-
+    logging.basicConfig(level=logging.INFO)
     # Запускаем фоновую задачу парсера
     from site_poster import analyze_create_form, check_required_fields,analyze_real_form_fields,test_form_manually, debug_form_submission
     analyze_create_form()
