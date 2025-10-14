@@ -5,4 +5,4 @@ ADMINS = [5225476657]  # твой Telegram ID
 #  === Настройки для публикации на сайт ===
 SITE_LOGIN = "ajlin4277@gmail.com"                    # логин для админки сайта
 SITE_PASSWORD = "Ab123456789"           # пароль для админки сайта
-SITE_ADD_NEWS_URL = "https://api.demo.agrosearch.kz"  # URL формы добавления новости
+SITE_URL = "https://api.demo.agrosearch.kz"  # URL формы добавления новости
