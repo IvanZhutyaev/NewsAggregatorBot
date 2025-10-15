@@ -1,12 +1,64 @@
 import os
 from datetime import datetime
-
 import requests
 import json
 from bs4 import BeautifulSoup
 from config import SITE_URL, SITE_LOGIN, SITE_PASSWORD
 import re
+from translator_libre import translate_text
+
 session = requests.Session()
+
+
+
+
+def translate_news_content(title: str, body: str, subtitle: str = "") -> dict:
+    """
+    Переводит все компоненты новости на три языка
+    Возвращает словарь с переводами
+    """
+    translations = {
+        'ru': {
+            'title': title,
+            'body': body,
+            'subtitle': subtitle if subtitle else body[:120] + "..." if len(body) > 120 else body
+        }
+    }
+
+    # Языки для перевода
+    target_languages = ['en', 'kk', 'zh']
+
+    for lang in target_languages:
+        try:
+            # Переводим заголовок
+            translated_title = translate_text(title, lang)
+
+            # Переводим основной текст
+            translated_body = translate_text(body, lang)
+
+            # Переводим подзаголовок (если есть) или создаем из тела
+            if subtitle:
+                translated_subtitle = translate_text(subtitle, lang)
+            else:
+                # Создаем подзаголовок из переведенного текста
+                translated_subtitle = translated_body[:120] + "..." if len(translated_body) > 120 else translated_body
+
+            translations[lang] = {
+                'title': translated_title,
+                'body': translated_body,
+                'subtitle': translated_subtitle
+            }
+
+        except Exception as e:
+            print(f"❌ Критическая ошибка перевода на {lang}: {e}")
+            # В случае ошибки используем оригинальный текст
+            translations[lang] = {
+                'title': title,
+                'body': body,
+                'subtitle': subtitle if subtitle else body[:120] + "..." if len(body) > 120 else body
+            }
+
+    return translations
 
 
 def login_to_site() -> bool:
@@ -77,6 +129,7 @@ def extract_title_and_body(text: str):
 
     return title, body
 
+
 def get_csrf_token_for_create() -> str:
     """Получаем CSRF токен со страницы создания новости"""
     create_url = f"{SITE_URL}/admin/news/create"
@@ -131,8 +184,8 @@ def get_csrf_token_for_create() -> str:
         return None
 
 
-def post_news_to_site_simple(news_text: str, image_path: str = None) -> bool:
-    """Исправленная версия с правильной загрузкой изображений"""
+def post_news_to_site_multilingual(news_text: str, image_path: str = None) -> bool:
+    """Улучшенная версия с мультиязычной поддержкой"""
     if not login_to_site():
         return False
 
@@ -143,46 +196,79 @@ def post_news_to_site_simple(news_text: str, image_path: str = None) -> bool:
     create_url = f"{SITE_URL}/admin/news"
     title, body = extract_title_and_body(news_text)
 
-    print("🔄 Используем правильный формат для ВСЕХ translatable полей Voyager...")
-    print(f"📝 Отправляем данные на: {create_url}")
+    print("🔄 Начинаем мультиязычную публикацию...")
 
-    # ОПТИМАЛЬНЫЕ ДЛИНЫ ДЛЯ ПОЛЕЙ VOYAGER:
-    title = title[:80]
-    subtitle = body[:120].strip()
-    if len(body) > 120:
-        subtitle += "..."
-    seo_title = title[:55]
-    seo_description = body[:155].strip()
-    if len(body) > 155:
-        seo_description += "..."
-    seo_keywords = "агро, сельское хозяйство, АПК, новости сельского хозяйства"
+    # Получаем переводы для всех языков
+    translations = translate_news_content(title, body)
 
-    print(f"📊 Оптимизированные длины полей:")
-    print(f"  - Заголовок: {len(title)} символов")
-    print(f"  - Подзаголовок: {len(subtitle)} символов")
-    print(f"  - SEO заголовок: {len(seo_title)} символов")
-    print(f"  - SEO описание: {len(seo_description)} символов")
+    # Создаем подзаголовки для каждого языка
+    subtitles = {}
+    for lang, content in translations.items():
+        body_text = content['body']
+        subtitles[lang] = body_text[:120].strip()
+        if len(body_text) > 120:
+            subtitles[lang] += "..."
+
+    # SEO настройки (переводим только ключевые слова)
+    seo_keywords_translations = {
+        'ru': "агро, сельское хозяйство, АПК, новости сельского хозяйства",
+        'en': "agro, agriculture, agro-industrial complex, agricultural news",
+        'kk': "агро, ауыл шаруашылығы, АӘК, ауыл шаруашылығы жаңалықтары",
+        'zh': "农业, 农业综合企业, 农工综合体, 农业新闻"
+    }
+
+    print("📊 Подготавливаем мультиязычные данные...")
 
     # ПРАВИЛЬНЫЙ формат для ВСЕХ translatable полей в Voyager
     data = {
         "_token": csrf_token,
         "i18n_selector": "ru",
 
-        # ВСЕ translatable поля в правильном формате для Voyager
-        "title_i18n": json.dumps({"ru": title, "kk": "", "en": "", "zh": ""}),
-        "subtitle_i18n": json.dumps({"ru": subtitle, "kk": "", "en": "", "zh": ""}),
-        "description_i18n": json.dumps({"ru": body, "kk": "", "en": "", "zh": ""}),
-        "seo_title_i18n": json.dumps({"ru": seo_title, "kk": "", "en": "", "zh": ""}),
-        "seo_description_i18n": json.dumps({"ru": seo_description, "kk": "", "en": "", "zh": ""}),
-        "seo_keywords_i18n": json.dumps({"ru": seo_keywords, "kk": "", "en": "", "zh": ""}),
+        # Мультиязычные поля в правильном формате для Voyager
+        "title_i18n": json.dumps({
+            "ru": translations['ru']['title'],
+            "en": translations['en']['title'],
+            "kk": translations['kk']['title'],
+            "zh": translations['zh']['title']
+        }),
+        "subtitle_i18n": json.dumps({
+            "ru": subtitles['ru'],
+            "en": subtitles['en'],
+            "kk": subtitles['kk'],
+            "zh": subtitles['zh']
+        }),
+        "description_i18n": json.dumps({
+            "ru": translations['ru']['body'],
+            "en": translations['en']['body'],
+            "kk": translations['kk']['body'],
+            "zh": translations['zh']['body']
+        }),
+        "seo_title_i18n": json.dumps({
+            "ru": translations['ru']['title'][:55],
+            "en": translations['en']['title'][:55],
+            "kk": translations['kk']['title'][:55],
+            "zh": translations['zh']['title'][:55]
+        }),
+        "seo_description_i18n": json.dumps({
+            "ru": subtitles['ru'][:155],
+            "en": subtitles['en'][:155],
+            "kk": subtitles['kk'][:155],
+            "zh": subtitles['zh'][:155]
+        }),
+        "seo_keywords_i18n": json.dumps({
+            "ru": seo_keywords_translations['ru'],
+            "en": seo_keywords_translations['en'],
+            'kk': seo_keywords_translations['kk'],
+            'zh': seo_keywords_translations['zh']
+        }),
 
-        # Также отправляем обычные поля
-        "title": title,
-        "subtitle": subtitle,
-        "description": body,
-        "seo_title": seo_title,
-        "seo_description": seo_description,
-        "seo_keywords": seo_keywords,
+        # Также отправляем обычные поля (для русского языка как fallback)
+        "title": translations['ru']['title'],
+        "subtitle": subtitles['ru'],
+        "description": translations['ru']['body'],
+        "seo_title": translations['ru']['title'][:55],
+        "seo_description": subtitles['ru'][:155],
+        "seo_keywords": seo_keywords_translations['ru'],
 
         # Дополнительные поля
         "status": "PUBLISHED",
@@ -221,7 +307,7 @@ def post_news_to_site_simple(news_text: str, image_path: str = None) -> bool:
         print("⚠️ Изображение не найдено или путь не указан")
 
     try:
-        print("📤 Отправляем запрос с файлами...")
+        print("📤 Отправляем мультиязычную новость...")
         response = session.post(create_url, data=data, files=files, timeout=30)
 
         # Закрываем файлы
@@ -236,9 +322,9 @@ def post_news_to_site_simple(news_text: str, image_path: str = None) -> bool:
 
             # Сохраняем ошибку для анализа
             error_content = response.text
-            with open("error_image_upload.html", "w", encoding="utf-8") as f:
+            with open("error_multilingual_upload.html", "w", encoding="utf-8") as f:
                 f.write(error_content)
-            print("🔍 Детали ошибки сохранены в error_image_upload.html")
+            print("🔍 Детали ошибки сохранены в error_multilingual_upload.html")
 
             return False
 
@@ -246,7 +332,7 @@ def post_news_to_site_simple(news_text: str, image_path: str = None) -> bool:
             if response.status_code == 302:
                 location = response.headers.get('Location', '')
                 if 'admin/news' in location or 'success' in location.lower():
-                    print("✅ Новость успешно создана (редирект на список новостей)!")
+                    print("✅ Мультиязычная новость успешно создана!")
                     return True
                 else:
                     print(f"⚠️ Редирект на: {location}")
@@ -255,32 +341,33 @@ def post_news_to_site_simple(news_text: str, image_path: str = None) -> bool:
             # Проверяем успешность по содержимому
             success_indicators = ['успех', 'success', 'создан', 'created']
             if any(indicator in response.text.lower() for indicator in success_indicators):
-                print("✅ Новость успешно создана!")
+                print("✅ Мультиязычная новость успешно создана!")
                 return True
 
             # Если нет явных ошибок, считаем успешным
             error_indicators = ['error', 'ошибка', 'exception', 'invalid']
             if not any(indicator in response.text.lower() for indicator in error_indicators):
-                print("✅ Новость создана (нет ошибок в ответе)!")
+                print("✅ Мультиязычная новость создана (нет ошибок в ответе)!")
                 return True
 
             print("⚠️ Возможная ошибка в ответе")
             return False
         else:
-            print(f"❌ Ошибка публикации: {response.status_code}")
+            print(f"❌ Ошибка публикации мультиязычной новости: {response.status_code}")
             return False
 
     except Exception as e:
-        print(f"❌ Ошибка при отправке новости: {e}")
+        print(f"❌ Ошибка при отправке мультиязычной новости: {e}")
         return False
 
+
 def post_news_to_site(news_text: str, image_path: str = None) -> bool:
-    """Основная функция публикации новости"""
-    return post_news_to_site_simple(news_text, image_path)
+    """Основная функция публикации новости (теперь с мультиязычной поддержкой)"""
+    return post_news_to_site_multilingual(news_text, image_path)
 
 
-def post_news_to_site_alternative(news_text: str, image_path: str = None) -> bool:
-    """Альтернативный метод - отправка через имитацию браузера"""
+def post_news_to_site_simple(news_text: str, image_path: str = None) -> bool:
+    """Простая версия без перевода (для обратной совместимости)"""
     if not login_to_site():
         return False
 
@@ -291,48 +378,77 @@ def post_news_to_site_alternative(news_text: str, image_path: str = None) -> boo
     create_url = f"{SITE_URL}/admin/news"
     title, body = extract_title_and_body(news_text)
 
-    print("🔄 Альтернативный метод - минимальный набор translatable полей...")
+    print("🔄 Используем простую публикацию (только русский)...")
 
-    # Минимальный набор translatable полей
+    # ОПТИМАЛЬНЫЕ ДЛИНЫ ДЛЯ ПОЛЕЙ VOYAGER:
+    title = title[:80]
+    subtitle = body[:120].strip()
+    if len(body) > 120:
+        subtitle += "..."
+    seo_title = title[:55]
+    seo_description = body[:155].strip()
+    if len(body) > 155:
+        seo_description += "..."
+    seo_keywords = "агро, сельское хозяйство, АПК, новости сельского хозяйства"
+
+    # ПРАВИЛЬНЫЙ формат для ВСЕХ translatable полей в Voyager
     data = {
         "_token": csrf_token,
         "i18n_selector": "ru",
 
-        # Только обязательные translatable поля
+        # ВСЕ translatable поля в правильном формате для Voyager
         "title_i18n": json.dumps({"ru": title, "kk": "", "en": "", "zh": ""}),
+        "subtitle_i18n": json.dumps({"ru": subtitle, "kk": "", "en": "", "zh": ""}),
         "description_i18n": json.dumps({"ru": body, "kk": "", "en": "", "zh": ""}),
+        "seo_title_i18n": json.dumps({"ru": seo_title, "kk": "", "en": "", "zh": ""}),
+        "seo_description_i18n": json.dumps({"ru": seo_description, "kk": "", "en": "", "zh": ""}),
+        "seo_keywords_i18n": json.dumps({"ru": seo_keywords, "kk": "", "en": "", "zh": ""}),
 
-        # Обычные поля
+        # Также отправляем обычные поля
         "title": title,
+        "subtitle": subtitle,
         "description": body,
+        "seo_title": seo_title,
+        "seo_description": seo_description,
+        "seo_keywords": seo_keywords,
+
+        # Дополнительные поля
+        "status": "PUBLISHED",
+        "published_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+
+        # Системные поля
+        "redirect_to": "",
+        "model_name": "App\\Models\\News",
+        "model_id": "",
+        "type_slug": "news",
     }
 
     files = {}
-    if image_path:
+    if image_path and os.path.exists(image_path):
         try:
-            files["image"] = open(image_path, "rb")
+            image_filename = os.path.basename(image_path)
+            files["image"] = (image_filename, open(image_path, "rb"), 'image/jpeg')
         except Exception as e:
             print(f"⚠️ Не удалось открыть изображение: {e}")
 
     try:
-        response = session.post(create_url, data=data, files=files, timeout=20)
+        response = session.post(create_url, data=data, files=files, timeout=30)
 
         if files:
             files["image"].close()
 
-        print(f"📡 Ответ альтернативного метода: {response.status_code}")
+        print(f"📡 Ответ сервера: {response.status_code}")
 
         if response.status_code in (200, 302):
-            print("✅ Новость опубликована альтернативным методом!")
+            print("✅ Новость успешно создана!")
             return True
         else:
-            print(f"❌ Ошибка альтернативного метода: {response.status_code}")
+            print(f"❌ Ошибка публикации: {response.status_code}")
             return False
 
     except Exception as e:
-        print(f"❌ Ошибка альтернативного метода: {e}")
+        print(f"❌ Ошибка при отправке новости: {e}")
         return False
-
 
 
 def check_required_fields():
