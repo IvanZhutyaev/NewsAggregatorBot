@@ -88,16 +88,18 @@ def upload_image(image_path: str) -> str:
 
                 print(f"✅ Изображение загружено, путь от API: {image_path_from_api}")
 
-                # Обрабатываем путь от API
+                # Обрабатываем путь от API - добавляем префикс tmp/images/ если его нет
                 if image_path_from_api.startswith("/storage/"):
                     image_path_from_api = image_path_from_api[9:]  # удаляем "/storage/"
                 elif image_path_from_api.startswith("https://"):
-                    # Если вернулся полный URL, извлекаем только путь
+                    # Если вернулся полный URL, извлекаем только имя файла
                     from urllib.parse import urlparse
                     parsed_url = urlparse(image_path_from_api)
-                    image_path_from_api = parsed_url.path
-                    if image_path_from_api.startswith("/storage/"):
-                        image_path_from_api = image_path_from_api[9:]
+                    filename = os.path.basename(parsed_url.path)
+                    image_path_from_api = f"tmp/images/{filename}"
+                else:
+                    # Если вернулось только имя файла, добавляем путь
+                    image_path_from_api = f"tmp/images/{image_path_from_api}"
 
                 print(f"✅ Обработанный путь для image_uri: {image_path_from_api}")
                 return image_path_from_api
