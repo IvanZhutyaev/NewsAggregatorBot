@@ -153,3 +153,39 @@ async def clear_stuck_processing():
             AND datetime(created_at) < datetime('now', '-10 minutes')
         """)
         await db.commit()
+async def add_to_approval_queue(link: str, title: str, news_text: str, image_path: str):
+    """Добавляет новость в очередь одобрения"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("""
+            INSERT OR IGNORE INTO approval_queue (link, title, news_text, image_path)
+            VALUES (?, ?, ?, ?)
+        """, (link, title, news_text, image_path))
+        await db.commit()
+
+async def get_next_from_approval_queue():
+    """Получает следующую новость из очереди одобрения"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        cursor = await db.execute("""
+            SELECT id, link, title, news_text, image_path 
+            FROM approval_queue 
+            WHERE is_processing = FALSE 
+            ORDER BY created_at ASC 
+            LIMIT 1
+        """)
+        news = await cursor.fetchone()
+
+        if news:
+            await db.execute("""
+                UPDATE approval_queue 
+                SET is_processing = TRUE 
+                WHERE id = ?
+            """, (news[0],))
+            await db.commit()
+
+        return news
+
+async def mark_approval_processed(link: str):
+    """Помечает новость в очереди одобрения как обработанную"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("DELETE FROM approval_queue WHERE link = ?", (link,))
+        await db.commit()

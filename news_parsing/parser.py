@@ -7,7 +7,7 @@ from bs4 import BeautifulSoup
 from config import DEEPSEEK_KEY
 from database import get_sites, is_news_sent, is_news_published, mark_news_sent, add_to_queue, clear_stuck_processing, \
     get_next_from_queue, mark_queue_processed, get_queue_size
-from bot import send_news_to_admin
+from news_sender import send_raw_news_to_admin
 
 
 # Парсинг полного текста статьи
@@ -104,6 +104,9 @@ def limit_words(text: str, max_words: int = 180) -> str:
         return text
     return " ".join(words[:max_words]) + "…"
 
+async def process_with_deepseek(title: str, body: str) -> str:
+    """Обработка текста через DeepSeek после одобрения сырой новости"""
+    return paraphrase_with_deepseek(title, body)
 
 # Функция для сравнения текстов до и после обработки
 def print_text_comparison(original_title: str, original_body: str, processed_text: str):
@@ -290,10 +293,7 @@ async def check_news_and_send():
 async def process_next_from_queue():
     """Обрабатывает следующую новость из очереди"""
     try:
-        # Очищаем зависшие обработки
         await clear_stuck_processing()
-
-        # Получаем следующую новость из очереди
         queue_item = await get_next_from_queue()
 
         if not queue_item:
@@ -304,8 +304,8 @@ async def process_next_from_queue():
         print(f"🎯 Обрабатываем новость из очереди: {title}")
         print(f"🔗 Ссылка: {link}")
 
-        # Отправляем админам на модерацию
-        await send_news_to_admin(news_text, link)
+        # Теперь отправляем СЫРУЮ новость на первичное одобрение
+        await send_raw_news_to_admin(title, news_text, link)
 
         # Помечаем как отправленную на модерацию
         await mark_news_sent(link)
@@ -313,12 +313,11 @@ async def process_next_from_queue():
         # Удаляем из очереди после успешной обработки
         await mark_queue_processed(link)
 
-        print(f"✅ Новость из очереди обработана и отправлена админам")
+        print(f"✅ Сырая новость отправлена на первичную модерацию")
         return True
 
     except Exception as e:
         print(f"❌ Ошибка обработки новости из очереди: {e}")
-        # В случае ошибки снимаем блокировку с новости
         if 'queue_item' in locals() and queue_item:
             await mark_queue_processed(queue_item[1])
         return False
@@ -366,3 +365,6 @@ async def scheduler():
         except Exception as e:
             print(f"❌ Ошибка в планировщике: {e}")
             await asyncio.sleep(60)  # Ждем минуту при ошибке
+async def process_with_deepseek(title: str, body: str) -> str:
+    """Обработка текста через DeepSeek после одобрения сырой новости"""
+    return paraphrase_with_deepseek(title, body)

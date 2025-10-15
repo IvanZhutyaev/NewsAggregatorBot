@@ -1,91 +1,88 @@
 import asyncio
 import os
-import random
-import hashlib
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.exceptions import TelegramForbiddenError, TelegramNetworkError
 from aiogram.types import FSInputFile
 from config import BOT_TOKEN, CHANNEL_ID, ADMINS
 from database import init_db, add_site, remove_site, get_sites, is_news_sent, mark_news_sent, mark_news_published, \
     get_queue_size, clear_stuck_processing
 from site_poster import post_news_to_site
+from news_sender import send_processed_news_to_admin, get_pending_raw_news, get_pending_processed_news, \
+    remove_from_pending_raw_news, remove_from_pending_processed_news
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# Глобальный словарь для хранения новостей в ожидании
-pending_news = {}
+
+# Команды для админов
+def is_admin(user_id: int) -> bool:
+    return user_id in ADMINS
 
 
-# Отправка новости всем админам
-async def send_news_to_admin(news_text: str, source_url: str):
-    max_retries = 3
-    for attempt in range(max_retries):
+# Обработка одобрения сырой новости
+@dp.callback_query(F.data.startswith("approve_raw|"))
+async def approve_raw_news(callback: types.CallbackQuery):
+    await callback.answer("✅ Новость одобрена для редактирования")
+
+    _, news_id = callback.data.split("|", 1)
+    data = get_pending_raw_news().get(news_id)
+    if not data:
+        await callback.message.answer("❌ Новость не найдена.")
+        return
+
+    try:
+        # Удаляем сообщение с сырой новостью
+        await callback.message.delete()
+    except Exception:
+        pass
+
+    # Обрабатываем через DeepSeek
+    from parser import process_with_deepseek
+    processed_text = await process_with_deepseek(data["title"], data["text"])
+
+    # Отправляем обработанную новость на финальное одобрение
+    await send_processed_news_to_admin(processed_text, data["url"], data["title"])
+
+    # Удаляем из временного хранилища
+    remove_from_pending_raw_news(news_id)
+
+    # Уведомляем админа
+    await callback.message.answer("✅ Новость отправлена на обработку DeepSeek")
+
+
+# Обработка отклонения сырой новости
+@dp.callback_query(F.data.startswith("reject_raw|"))
+async def reject_raw_news(callback: types.CallbackQuery):
+    try:
+        await callback.answer("❌ Новость отклонена")
+    except Exception:
+        pass
+
+    _, news_id = callback.data.split("|", 1)
+
+    remove_from_pending_raw_news(news_id)
+
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+
+    # Уведомляем ВСЕХ админов об отклонении
+    for admin_id in ADMINS:
         try:
-            image_files = os.listdir("images")
-            if not image_files:
-                print("❌ Нет изображений в папке images")
-                return
-
-            image_path = os.path.join("images", random.choice(image_files))
-            news_id = hashlib.md5(source_url.encode()).hexdigest()
-            pending_news[news_id] = {"url": source_url, "image": image_path, "text": news_text}
-
-            keyboard = InlineKeyboardBuilder()
-            keyboard.button(text="🌐 На сайт", callback_data=f"site|{news_id}")
-            keyboard.button(text="✅ В Telegram", callback_data=f"approve|{news_id}")
-            keyboard.button(text="🚀 Оба", callback_data=f"both|{news_id}")
-            keyboard.button(text="❌ Отклонить", callback_data=f"reject|{news_id}")
-
-            photo = FSInputFile(image_path)
-            admin_caption = f"{news_text}\n\nИсточник: {source_url}"
-
-            # Отправляем ВСЕМ админам
-            sent_to_admins = 0
-            for admin_id in ADMINS:
-                try:
-                    if len(admin_caption) <= 1024:
-                        await bot.send_photo(
-                            admin_id,
-                            photo,
-                            caption=admin_caption,
-                            reply_markup=keyboard.as_markup()
-                        )
-                    else:
-                        await bot.send_photo(admin_id, photo, reply_markup=keyboard.as_markup())
-                        await bot.send_message(admin_id, admin_caption)
-                    print(f"✅ Новость отправлена админу {admin_id}")
-                    sent_to_admins += 1
-                except TelegramForbiddenError:
-                    print(f"❌ Не удалось отправить админу {admin_id} — он не написал боту.")
-                except Exception as e:
-                    print(f"❌ Ошибка отправки админу {admin_id}: {e}")
-
-            if sent_to_admins > 0:
-                print(f"📨 Новость отправлена {sent_to_admins} админам")
-                break  # Успешно отправлено хотя бы одному админу
-
-        except TelegramNetworkError as e:
-            if attempt < max_retries - 1:
-                wait_time = 2 ** attempt
-                print(f"⚠️ Ошибка сети, повторная попытка {attempt + 1} через {wait_time} сек...")
-                await asyncio.sleep(wait_time)
-            else:
-                print(f"❌ Не удалось отправить новость после {max_retries} попыток: {e}")
-        except Exception as e:
-            print(f"❌ Критическая ошибка в send_news_to_admin: {e}")
-            break
+            await bot.send_message(admin_id, "❌ Сырая новость отклонена.")
+        except Exception:
+            pass
 
 
-# Подтверждение новости
+# Подтверждение обработанной новости для Telegram
 @dp.callback_query(F.data.startswith("approve|"))
-async def approve_news(callback: types.CallbackQuery):
+async def approve_processed_news(callback: types.CallbackQuery):
     await callback.answer()
 
     _, news_id = callback.data.split("|", 1)
-    data = pending_news.get(news_id)
+    data = get_pending_processed_news().get(news_id)
     if not data:
         await callback.message.answer("❌ Новость не найдена.")
         return
@@ -110,7 +107,7 @@ async def approve_news(callback: types.CallbackQuery):
 
     # Отмечаем как опубликованную
     await mark_news_published(data["url"])
-    pending_news.pop(news_id, None)
+    remove_from_pending_processed_news(news_id)
 
     try:
         await callback.message.delete()
@@ -130,19 +127,17 @@ async def post_to_site(callback: types.CallbackQuery):
     try:
         await callback.answer()
         _, news_id = callback.data.split("|", 1)
-        data = pending_news.get(news_id)
+        data = get_pending_processed_news().get(news_id)
         if not data:
             await callback.message.answer("❌ Новость не найдена.")
             return
 
         success = post_news_to_site(data["text"], data["image"])
         if success:
-            # Отмечаем как опубликованную
             await mark_news_published(data["url"])
-            pending_news.pop(news_id, None)
+            remove_from_pending_processed_news(news_id)
             await callback.message.answer("🌐 Новость опубликована на сайте!")
 
-            # Уведомляем ВСЕХ админов о публикации
             for admin_id in ADMINS:
                 try:
                     await bot.send_message(admin_id, "🌐 Новость опубликована на сайте!")
@@ -160,7 +155,7 @@ async def post_to_both(callback: types.CallbackQuery):
     try:
         await callback.answer()
         _, news_id = callback.data.split("|", 1)
-        data = pending_news.get(news_id)
+        data = get_pending_processed_news().get(news_id)
         if not data:
             await callback.message.answer("❌ Новость не найдена.")
             return
@@ -181,12 +176,10 @@ async def post_to_both(callback: types.CallbackQuery):
             success_tg = False
 
         # Результат
-        if success_site or success_tg:  # Если хотя бы одна публикация успешна
-            # Отмечаем как опубликованную
+        if success_site or success_tg:
             await mark_news_published(data["url"])
-            pending_news.pop(news_id, None)
+            remove_from_pending_processed_news(news_id)
 
-            # Уведомляем ВСЕХ админов о публикации
             result_message = ""
             if success_site and success_tg:
                 result_message = "🚀 Новость опубликована в Telegram и на сайте!"
@@ -208,36 +201,27 @@ async def post_to_both(callback: types.CallbackQuery):
         await callback.message.answer("❌ Произошла ошибка при публикации.")
 
 
-# Отклонение новости
 @dp.callback_query(F.data.startswith("reject|"))
-async def reject_news(callback: types.CallbackQuery):
+async def reject_processed_news(callback: types.CallbackQuery):
     try:
-        await callback.answer("Новость отклонена")
+        await callback.answer("❌ Новость отклонена")
     except Exception:
         pass
 
     _, news_id = callback.data.split("|", 1)
-    data = pending_news.get(news_id)
 
-    if data:
-        pending_news.pop(news_id, None)
+    remove_from_pending_processed_news(news_id)
 
     try:
         await callback.message.delete()
     except Exception:
         pass
 
-    # Уведомляем ВСЕХ админов об отклонении
     for admin_id in ADMINS:
         try:
-            await bot.send_message(admin_id, "❌ Новость отклонена.")
+            await bot.send_message(admin_id, "❌ Обработанная новость отклонена.")
         except Exception:
             pass
-
-
-# Команды для админов
-def is_admin(user_id: int) -> bool:
-    return user_id in ADMINS
 
 
 @dp.message(Command("start"))
@@ -266,7 +250,11 @@ async def cmd_start(message: types.Message):
 */postlatest* - принудительно проверить новости
 
 *📨 Модерация новостей:*
-Когда приходит новость, используйте кнопки:
+*1 этап* - Сырая новость:
+• ✅ *Одобрить для редактирования* - отправить на обработку DeepSeek
+• ❌ *Отклонить* - удалить новость
+
+*2 этап* - Обработанная новость:
 • 🌐 *На сайт* - опубликовать только на сайте
 • ✅ *В Telegram* - опубликовать только в Telegram  
 • 🚀 *Оба* - опубликовать везде
@@ -274,9 +262,10 @@ async def cmd_start(message: types.Message):
 
 *⚙️ Система работает так:*
 1. Новости добавляются в очередь
-2. Обрабатывается по одной новости за раз
-3. Новость приходит всем админам
-4. Следующая новость ждет решения по текущей
+2. Сырая новость приходит всем админам
+3. После одобрения → обработка через DeepSeek
+4. Обработанная новость приходит на финальную модерацию
+5. Следующая новость ждет решения по текущей
 
 Для начала работы добавьте RSS-ленты командой /addsite
     """
@@ -304,9 +293,13 @@ async def cmd_help(message: types.Message):
 `/skipnext` - пропустить зависшую новость
 `/postlatest` - принудительно проверить все RSS-ленты
 
+*Процесс модерации:*
+1. *Сырая новость* - проверяете исходный контент
+2. *Одобряете* - отправляете на AI-обработку
+3. *Обработанная новость* - выбираете куда публиковать
+
 *Примеры RSS-лент:*
 • https://www.agroinvestor.ru/news/rss/
-• https://www.agronews.ru/rss/news.xml
 • https://www.agroxxi.ru/export/rss.xml
 
 Для начала работы добавьте хотя бы одну RSS-ленту!
@@ -388,13 +381,19 @@ async def cmd_queue_status(message: types.Message):
         return
 
     queue_size = await get_queue_size()
-    pending_count = len(pending_news)
+    from news_sender import get_pending_raw_news, get_pending_processed_news
+    pending_raw_count = len(get_pending_raw_news())
+    pending_processed_count = len(get_pending_processed_news())
 
     status_text = (
         f"📊 *Статус системы*\n\n"
         f"• 📥 Новостей в очереди: *{queue_size}*\n"
-        f"• ⏳ Новостей на модерации: *{pending_count}*\n"
+        f"• ⏳ Сырых новостей на модерации: *{pending_raw_count}*\n"
+        f"• ✍️ Обработанных новостей на модерации: *{pending_processed_count}*\n"
         f"• 👥 Всего админов: *{len(ADMINS)}*\n"
+        f"\n*Процесс модерации:*\n"
+        f"1. Сырая новость → Одобрение → DeepSeek\n"
+        f"2. Обработанная новость → Публикация\n"
         f"\n*Управление очередью:*\n"
         f"`/postnext` - обработать следующую новость\n"
         f"`/skipnext` - пропустить текущую новость\n"
@@ -418,7 +417,7 @@ async def cmd_post_next(message: types.Message):
     success = await process_next_from_queue()
 
     if success:
-        await message.answer("✅ Следующая новость отправлена на модерацию всем админам!")
+        await message.answer("✅ Следующая новость отправлена на первичную модерацию всем админам!")
     else:
         await message.answer("❌ В очереди нет новых новостей.")
 
@@ -454,7 +453,7 @@ async def cmd_post_latest(message: types.Message):
             news_count = await parse_feed_and_process(url, limit=1)
             posted += news_count
             if news_count > 0:
-                await message.answer(f"✅ Добавлено {news_count} новостей из:\n`{url}`", parse_mode="Markdown")
+                await message.answer(f"✅ Добавлено {news_count} новостей в очередь из:\n`{url}`", parse_mode="Markdown")
         except Exception as e:
             await message.answer(f"❌ Ошибка при проверке {url}:\n`{e}`", parse_mode="Markdown")
 

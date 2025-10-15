@@ -1,9 +1,9 @@
 import asyncio
-import site_poster
 from bot import dp, bot
 from parser import scheduler
 import logging
 import sys
+
 async def main():
     print("🤖 Бот запускается...")
     try:
@@ -24,6 +24,7 @@ async def main():
                 print("✅ Фоновая задача парсера остановлена")
             except Exception as e:
                 print(f"⚠️ Ошибка при остановке парсера: {e}")
+
 if __name__ == "__main__":
     try:
         asyncio.run(main())
