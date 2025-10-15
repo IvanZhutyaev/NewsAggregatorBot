@@ -1,47 +1,35 @@
 import asyncio
-from aiogram import Bot
-from config import BOT_TOKEN
-from bot import dp, on_startup
-from parser import periodic_rss_check, process_queue_automatically
-
-
+import site_poster
+from bot import dp, bot
+from parser import scheduler
+import logging
+import sys
 async def main():
-    # Инициализация бота
-    bot = Bot(token=BOT_TOKEN)
-
-    # Запускаем инициализацию
-    await on_startup()
-
-    # Запускаем бота
-    print("🤖 Бот запущен!")
-
-    # Создаем фоновые задачи
-    async def background_tasks():
-        while True:
-            try:
-                # Проверяем RSS каждые 10 минут
-                await periodic_rss_check()
-
-                # Обрабатываем очередь каждые 5 минут
-                await process_queue_automatically()
-
-            except Exception as e:
-                print(f"❌ Ошибка в фоновых задачах: {e}")
-
-            # Ждем 5 минут до следующей проверки
-            await asyncio.sleep(300)  # 5 минут
-
-    # Запускаем фоновые задачи
-    asyncio.create_task(background_tasks())
-
-    # Запускаем поллинг бота
+    print("🤖 Бот запускается...")
     try:
-        await dp.start_polling(bot)
+        parser_task = asyncio.create_task(scheduler())
+        await dp.start_polling(
+            bot,
+            handle_signals=False,
+            allowed_updates=dp.resolve_used_update_types()
+        )
     except Exception as e:
-        print(f"❌ Ошибка поллинга: {e}")
+        print(f"❌ Ошибка бота: {e}")
     finally:
-        await bot.session.close()
-
-
+        if 'parser_task' in locals():
+            parser_task.cancel()
+            try:
+                await parser_task
+            except asyncio.CancelledError:
+                print("✅ Фоновая задача парсера остановлена")
+            except Exception as e:
+                print(f"⚠️ Ошибка при остановке парсера: {e}")
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("👋 Бот остановлен пользователем")
+    except Exception as e:
+        print(f"❌ Критическая ошибка: {e}")
+        import traceback
+        traceback.print_exc()

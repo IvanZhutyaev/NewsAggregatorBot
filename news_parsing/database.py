@@ -1,5 +1,4 @@
 import aiosqlite
-from datetime import datetime
 
 DB_NAME = "news.db"
 
@@ -25,21 +24,17 @@ async def init_db():
         )
         """)
         await db.execute("""
-        CREATE TABLE IF NOT EXISTS processing_queue (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            link TEXT UNIQUE,
-            title TEXT,
-            news_text TEXT,
-            image_path TEXT,
-            original_title TEXT,
-            original_text TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            is_processing BOOLEAN DEFAULT FALSE,
-            processed_by INTEGER DEFAULT NULL,
-            needs_deepseek BOOLEAN DEFAULT TRUE,
-            deepseek_processed BOOLEAN DEFAULT FALSE
-        )
-        """)
+                CREATE TABLE IF NOT EXISTS processing_queue (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    link TEXT UNIQUE,
+                    title TEXT,
+                    news_text TEXT,
+                    image_path TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    is_processing BOOLEAN DEFAULT FALSE,
+                    processed_by INTEGER DEFAULT NULL
+                )
+                """)
         await db.commit()
 
 async def add_site(url):
@@ -98,14 +93,13 @@ async def cleanup_old_pending_news(days=7):
         await db.commit()
 
 
-async def add_to_queue(link: str, title: str, news_text: str, image_path: str, original_title: str, original_text: str):
+async def add_to_queue(link: str, title: str, news_text: str, image_path: str):
     """Добавляет новость в очередь обработки"""
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("""
-            INSERT OR IGNORE INTO processing_queue 
-            (link, title, news_text, image_path, original_title, original_text)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (link, title, news_text, image_path, original_title, original_text))
+            INSERT OR IGNORE INTO processing_queue (link, title, news_text, image_path)
+            VALUES (?, ?, ?, ?)
+        """, (link, title, news_text, image_path))
         await db.commit()
 
 
@@ -114,7 +108,7 @@ async def get_next_from_queue():
     async with aiosqlite.connect(DB_NAME) as db:
         # Ищем первую необрабатываемую новость
         cursor = await db.execute("""
-            SELECT id, link, title, news_text, image_path, original_title, original_text, needs_deepseek, deepseek_processed
+            SELECT id, link, title, news_text, image_path 
             FROM processing_queue 
             WHERE is_processing = FALSE 
             ORDER BY created_at ASC 
@@ -158,25 +152,4 @@ async def clear_stuck_processing():
             WHERE is_processing = TRUE 
             AND datetime(created_at) < datetime('now', '-10 minutes')
         """)
-        await db.commit()
-
-async def update_news_with_deepseek(link: str, processed_text: str):
-    """Обновляет новость после обработки DeepSeek"""
-    async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute("""
-            UPDATE processing_queue 
-            SET title = ?, news_text = ?, deepseek_processed = TRUE, needs_deepseek = FALSE
-            WHERE link = ?
-        """, (processed_text.split('\n\n')[0] if '\n\n' in processed_text else processed_text, 
-              processed_text, link))
-        await db.commit()
-
-async def mark_no_deepseek_needed(link: str):
-    """Помечает, что новость не требует обработки DeepSeek"""
-    async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute("""
-            UPDATE processing_queue 
-            SET needs_deepseek = FALSE 
-            WHERE link = ?
-        """, (link,))
         await db.commit()
