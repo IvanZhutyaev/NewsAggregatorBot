@@ -1,32 +1,129 @@
 import os
-from datetime import datetime
 import requests
 import json
-from bs4 import BeautifulSoup
+from datetime import datetime
 from config import SITE_URL, SITE_LOGIN, SITE_PASSWORD
-import re
 from translator_libre import translate_text
 
-session = requests.Session()
+# Базовый URL API
+BASE_API_URL = "https://api.demo.agrosearch.kz/api"
+# BASE_API_URL = "https://api.agrosearch.kz/api"  # для продакшена
+
+# Глобальная переменная для хранения токена
+access_token = None
 
 
 def truncate_text(text: str, max_length: int) -> str:
     """Обрезает текст до максимальной длины, сохраняя слова"""
-    if len(text) <= max_length:
+    if not text or len(text) <= max_length:
         return text
     return text[:max_length - 3].rsplit(' ', 1)[0] + "..."
 
 
-def translate_news_content(title: str, body: str, subtitle: str = "") -> dict:
+def login_to_api() -> bool:
+    """Аутентификация в API и получение токена"""
+    global access_token
+
+    login_url = f"{BASE_API_URL}/auth/login"
+
+    try:
+        print("🔑 Аутентифицируемся в API...")
+
+        payload = {
+            "email": SITE_LOGIN,
+            "password": SITE_PASSWORD
+        }
+
+        headers = {
+            "Content-Type": "application/json",
+            "Accept-Language": "ru"
+        }
+
+        response = requests.post(login_url, json=payload, headers=headers, timeout=30)
+
+        if response.status_code == 200:
+            data = response.json()
+            access_token = data.get("access_token")
+            if access_token:
+                print("✅ Успешная аутентификация в API")
+                return True
+            else:
+                print("❌ Токен не получен в ответе")
+                return False
+        else:
+            print(f"❌ Ошибка аутентификации: {response.status_code}")
+            print(f"Ответ: {response.text}")
+            return False
+
+    except Exception as e:
+        print(f"❌ Ошибка при аутентификации: {e}")
+        return False
+
+
+def upload_image(image_path: str) -> str:
+    """Загружает изображение и возвращает путь для использования в новости"""
+    global access_token
+
+    if not access_token:
+        if not login_to_api():
+            return None
+
+    upload_url = f"{BASE_API_URL}/upload/image"
+
+    try:
+        print(f"🖼️ Загружаем изображение: {image_path}")
+
+        if not os.path.exists(image_path):
+            print(f"❌ Файл изображения не найден: {image_path}")
+            return None
+
+        with open(image_path, 'rb') as image_file:
+            files = {'image': (os.path.basename(image_path), image_file, 'image/jpeg')}
+
+            response = requests.post(upload_url, files=files, timeout=30)
+
+            if response.status_code == 200:
+                data = response.json()
+                image_path_from_api = data.get("data", {}).get("path", "")
+
+                print(f"✅ Изображение загружено, путь от API: {image_path_from_api}")
+
+                # Обрабатываем путь от API
+                if image_path_from_api.startswith("/storage/"):
+                    image_path_from_api = image_path_from_api[9:]  # удаляем "/storage/"
+                elif image_path_from_api.startswith("https://"):
+                    # Если вернулся полный URL, извлекаем только путь
+                    from urllib.parse import urlparse
+                    parsed_url = urlparse(image_path_from_api)
+                    image_path_from_api = parsed_url.path
+                    if image_path_from_api.startswith("/storage/"):
+                        image_path_from_api = image_path_from_api[9:]
+
+                print(f"✅ Обработанный путь для image_uri: {image_path_from_api}")
+                return image_path_from_api
+            else:
+                print(f"❌ Ошибка загрузки изображения: {response.status_code}")
+                print(f"Ответ: {response.text}")
+                return None
+
+    except Exception as e:
+        print(f"❌ Ошибка при загрузке изображения: {e}")
+        return None
+
+
+def translate_news_content(title: str, body: str) -> dict:
     """
     Переводит все компоненты новости на три языка
     Возвращает словарь с переводами
     """
+    # Создаем короткий подзаголовок из первых 200 символов тела текста
+    short_subtitle = truncate_text(body, 200)
+
     translations = {
         'ru': {
-            'title': title,
-            'body': body,
-            'subtitle': subtitle if subtitle else truncate_text(body, 120)
+            'title': truncate_text(title, 255),
+            'description': body,
+            'subtitle': short_subtitle
         }
     }
 
@@ -35,79 +132,43 @@ def translate_news_content(title: str, body: str, subtitle: str = "") -> dict:
 
     for lang in target_languages:
         try:
-            # Переводим заголовок (ограничиваем длину)
-            translated_title = translate_text(truncate_text(title, 80), lang)
-            translated_title = truncate_text(translated_title, 80)
+            print(f"🔄 Переводим на {lang}...")
+
+            # Переводим заголовок
+            translated_title = translate_text(translations['ru']['title'], lang)
+            translated_title = truncate_text(translated_title, 255)
 
             # Переводим основной текст
-            translated_body = translate_text(body, lang)
+            translated_description = translate_text(body, lang)
 
-            # Создаем подзаголовок из переведенного текста (ограничиваем длину)
-            if subtitle:
-                translated_subtitle = translate_text(truncate_text(subtitle, 120), lang)
-            else:
-                translated_subtitle = truncate_text(translated_body, 120)
-
-            translated_subtitle = truncate_text(translated_subtitle, 120)
+            # Переводим подзаголовок (короткий)
+            translated_subtitle = translate_text(short_subtitle, lang)
+            translated_subtitle = truncate_text(translated_subtitle, 255)  # Ограничиваем до 255 символов
 
             translations[lang] = {
                 'title': translated_title,
-                'body': translated_body,
+                'description': translated_description,
                 'subtitle': translated_subtitle
             }
 
-            print(
-                f"✅ Перевод на {lang}: заголовок {len(translated_title)} симв, подзаголовок {len(translated_subtitle)} симв")
+            print(f"✅ Перевод на {lang} завершен")
+            print(f"   Заголовок: {translated_title}")
+            print(f"   Подзаголовок: {translated_subtitle}")
 
         except Exception as e:
-            print(f"❌ Критическая ошибка перевода на {lang}: {e}")
-            # В случае ошибки используем оригинальный текст с ограничением длины
+            print(f"❌ Ошибка перевода на {lang}: {e}")
+            # В случае ошибки используем русский текст с ограничением длины
             translations[lang] = {
-                'title': truncate_text(title, 80),
-                'body': body,
-                'subtitle': truncate_text(subtitle if subtitle else body, 120)
+                'title': translations['ru']['title'],
+                'description': translations['ru']['description'],
+                'subtitle': translations['ru']['subtitle']
             }
 
     return translations
 
 
-def login_to_site() -> bool:
-    """Авторизация в админ-панели Voyager"""
-    login_url = f"{SITE_URL}/admin/login"
-    try:
-        print("🔑 Входим в админ-панель...")
-
-        # Получаем CSRF токен со страницы логина
-        login_page = session.get(login_url, timeout=10)
-        soup = BeautifulSoup(login_page.text, "html.parser")
-        token_tag = soup.find("input", {"name": "_token"})
-        csrf_token = token_tag["value"] if token_tag else None
-
-        if not csrf_token:
-            print("⚠️ Не найден CSRF токен на странице логина")
-            return False
-
-        data = {
-            "email": SITE_LOGIN,
-            "password": SITE_PASSWORD,
-            "_token": csrf_token
-        }
-
-        resp = session.post(login_url, data=data, timeout=10)
-        if "voyager-dashboard" in resp.text or "logout" in resp.text:
-            print("✅ Авторизация прошла успешно")
-            return True
-        else:
-            print("⚠️ Авторизация не удалась. Проверь логин/пароль.")
-            return False
-    except Exception as e:
-        print(f"❌ Ошибка авторизации: {e}")
-        return False
-
-
 def extract_title_and_body(text: str):
-    """Разделяет текст на заголовок и тело с улучшенной логикой"""
-    # Убираем лишние пробелы
+    """Разделяет текст на заголовок и тело"""
     text = text.strip()
 
     # Ищем разделитель - двойной перенос строки
@@ -126,12 +187,8 @@ def extract_title_and_body(text: str):
             title = text
             body = ""
 
-    # Очищаем и ограничиваем заголовок
-    title = re.sub(r'\s+', ' ', title)  # Заменяем множественные пробелы на один
-    title = truncate_text(title, 80)  # Оптимальная длина для заголовка
-
-    # Очищаем тело текста
-    body = re.sub(r'\s+', ' ', body)  # Заменяем множественные пробелы на один
+    # Ограничиваем длину
+    title = truncate_text(title, 255)
 
     print(f"📄 Извлечен заголовок ({len(title)} символов): {title}")
     print(f"📄 Извлечен текст: {len(body)} символов")
@@ -139,345 +196,225 @@ def extract_title_and_body(text: str):
     return title, body
 
 
-def get_csrf_token_for_create() -> str:
-    """Получаем CSRF токен со страницы создания новости"""
-    create_url = f"{SITE_URL}/admin/news/create"
-    try:
-        resp = session.get(create_url, timeout=10)
-        if resp.status_code != 200:
-            print(f"⚠️ Ошибка при получении страницы создания: {resp.status_code}")
-            return None
+def create_news_api(title: str, description: str, subtitle: str, image_uri: str, translations: dict) -> bool:
+    """Создает новость через API"""
+    global access_token
 
-        soup = BeautifulSoup(resp.text, "html.parser")
+    if not access_token:
+        if not login_to_api():
+            return False
 
-        # Ищем ВСЕ формы на странице
-        forms = soup.find_all('form')
-        print(f"🔍 Найдено форм на странице: {len(forms)}")
-
-        for i, form in enumerate(forms):
-            action = form.get('action', '')
-            method = form.get('method', '')
-            print(f"  Форма {i + 1}: action='{action}', method='{method}'")
-
-        # Ищем форму с правильным action (обычно action='' или action='/admin/news')
-        target_form = None
-        for form in forms:
-            action = form.get('action', '')
-            # Ищем форму, которая не ведет на logout и не имеет подозрительного action
-            if 'logout' not in action and not action.startswith('/admin/logout'):
-                target_form = form
-                break
-
-        if not target_form and forms:
-            # Если не нашли подходящую, берем первую форму
-            target_form = forms[0]
-
-        if not target_form:
-            print("❌ Форма не найдена на странице")
-            return None
-
-        print("✅ Форма создания новости найдена")
-
-        # Ищем CSRF токен в форме
-        token_tag = target_form.find("input", {"name": "_token"})
-        if token_tag:
-            csrf_token = token_tag["value"]
-            print(f"✅ CSRF токен найден: {csrf_token[:20]}...")
-            return csrf_token
-
-        print("❌ CSRF токен не найден в форме")
-        return None
-
-    except Exception as e:
-        print(f"❌ Ошибка получения CSRF токена: {e}")
-        return None
-
-
-def post_news_to_site_multilingual(news_text: str, image_path: str = None) -> bool:
-    """Улучшенная версия с мультиязычной поддержкой и ограничением длины"""
-    if not login_to_site():
-        return False
-
-    csrf_token = get_csrf_token_for_create()
-    if not csrf_token:
-        return False
-
-    create_url = f"{SITE_URL}/admin/news"
-    title, body = extract_title_and_body(news_text)
-
-    print("🔄 Начинаем мультиязычную публикацию...")
-
-    # Получаем переводы для всех языков
-    translations = translate_news_content(title, body)
-
-    # SEO настройки (переводим только ключевые слова)
-    seo_keywords_translations = {
-        'ru': truncate_text("агро, сельское хозяйство, АПК, новости сельского хозяйства", 200),
-        'en': truncate_text("agro, agriculture, agro-industrial complex, agricultural news", 200),
-        'kk': truncate_text("агро, ауыл шаруашылығы, АӘК, ауыл шаруашылығы жаңалықтары", 200),
-        'zh': truncate_text("农业, 农业综合企业, 农工综合体, 农业新闻", 200)
-    }
-
-    print("📊 Подготавливаем мультиязычные данные...")
-
-    # ПРАВИЛЬНЫЙ формат для ВСЕХ translatable полей в Voyager
-    data = {
-        "_token": csrf_token,
-        "i18n_selector": "ru",
-
-        # Мультиязычные поля в правильном формате для Voyager с ограничением длины
-        "title_i18n": json.dumps({
-            "ru": truncate_text(translations['ru']['title'], 80),
-            "en": truncate_text(translations['en']['title'], 80),
-            "kk": truncate_text(translations['kk']['title'], 80),
-            "zh": truncate_text(translations['zh']['title'], 80)
-        }),
-        "subtitle_i18n": json.dumps({
-            "ru": truncate_text(translations['ru']['subtitle'], 120),
-            "en": truncate_text(translations['en']['subtitle'], 120),
-            "kk": truncate_text(translations['kk']['subtitle'], 120),
-            "zh": truncate_text(translations['zh']['subtitle'], 120)
-        }),
-        "description_i18n": json.dumps({
-            "ru": translations['ru']['body'],
-            "en": translations['en']['body'],
-            "kk": translations['kk']['body'],
-            "zh": translations['zh']['body']
-        }),
-        "seo_title_i18n": json.dumps({
-            "ru": truncate_text(translations['ru']['title'], 55),
-            "en": truncate_text(translations['en']['title'], 55),
-            "kk": truncate_text(translations['kk']['title'], 55),
-            "zh": truncate_text(translations['zh']['title'], 55)
-        }),
-        "seo_description_i18n": json.dumps({
-            "ru": truncate_text(translations['ru']['subtitle'], 155),
-            "en": truncate_text(translations['en']['subtitle'], 155),
-            "kk": truncate_text(translations['kk']['subtitle'], 155),
-            "zh": truncate_text(translations['zh']['subtitle'], 155)
-        }),
-        "seo_keywords_i18n": json.dumps({
-            "ru": seo_keywords_translations['ru'],
-            "en": seo_keywords_translations['en'],
-            'kk': seo_keywords_translations['kk'],
-            'zh': seo_keywords_translations['zh']
-        }),
-
-        # Также отправляем обычные поля (для русского языка как fallback)
-        "title": truncate_text(translations['ru']['title'], 80),
-        "subtitle": truncate_text(translations['ru']['subtitle'], 120),
-        "description": translations['ru']['body'],
-        "seo_title": truncate_text(translations['ru']['title'], 55),
-        "seo_description": truncate_text(translations['ru']['subtitle'], 155),
-        "seo_keywords": seo_keywords_translations['ru'],
-
-        # Дополнительные поля
-        "status": "PUBLISHED",
-        "published_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-
-        # Системные поля
-        "redirect_to": "",
-        "model_name": "App\\Models\\News",
-        "model_id": "",
-        "type_slug": "news",
-    }
-
-    files = {}
-    if image_path and os.path.exists(image_path):
-        try:
-            print("🖼️ Загружаем изображения с правильными именами:")
-
-            # Пробуем разные варианты имен файлов
-            image_filename = os.path.basename(image_path)
-
-            # Вариант 1: Основное изображение
-            files["image"] = (image_filename, open(image_path, "rb"), 'image/jpeg')
-            print(f"  ✅ image как '{image_filename}'")
-
-            # Вариант 2: SEO изображение
-            files["seo_image"] = (f"seo_{image_filename}", open(image_path, "rb"), 'image/jpeg')
-            print(f"  ✅ seo_image как 'seo_{image_filename}'")
-
-            # Вариант 3: image_uri (может быть нужно)
-            files["image_uri"] = (f"uri_{image_filename}", open(image_path, "rb"), 'image/jpeg')
-            print(f"  ✅ image_uri как 'uri_{image_filename}'")
-
-        except Exception as e:
-            print(f"⚠️ Не удалось открыть изображение: {e}")
-    else:
-        print("⚠️ Изображение не найдено или путь не указан")
+    news_url = f"{BASE_API_URL}/content/news"
 
     try:
-        print("📤 Отправляем мультиязычную новость...")
-        response = session.post(create_url, data=data, files=files, timeout=30)
+        print("📤 Создаем новость через API...")
 
-        # Закрываем файлы
-        for file_obj in files.values():
-            if hasattr(file_obj[1], 'close'):
-                file_obj[1].close()
+        # SEO настройки (ограничиваем длину)
+        seo_keywords = {
+            'ru': truncate_text("агро, сельское хозяйство, АПК, новости сельского хозяйства", 255),
+            'en': truncate_text("agro, agriculture, agro-industrial complex, agricultural news", 255),
+            'kk': truncate_text("агро, ауыл шаруашылығы, АӘК, ауыл шаруашылығы жаңалықтары", 255),
+            'zh': truncate_text("农业, 农业综合企业, 农工综合体, 农业新闻", 255)
+        }
+
+        # Подготовка данных для API с ограничениями длины
+        payload = {
+            # Основные поля на русском
+            "title": translations['ru']['title'],
+            "description": translations['ru']['description'],
+            "subtitle": translations['ru']['subtitle'],  # Максимум 255 символов
+            "image_uri": image_uri,
+
+            # Переводы на казахский
+            "title_kk": translations['kk']['title'],
+            "description_kk": translations['kk']['description'],
+            "subtitle_kk": translations['kk']['subtitle'],
+
+            # Переводы на английский
+            "title_en": translations['en']['title'],
+            "description_en": translations['en']['description'],
+            "subtitle_en": translations['en']['subtitle'],
+
+            # Переводы на китайский
+            "title_zh": translations['zh']['title'],
+            "description_zh": translations['zh']['description'],
+            "subtitle_zh": translations['zh']['subtitle'],
+
+            # SEO поля на русском
+            "seo_title": truncate_text(translations['ru']['title'], 255),
+            "seo_description": truncate_text(translations['ru']['subtitle'], 500),
+            "seo_keywords": seo_keywords['ru'],
+            "seo_image": image_uri,
+
+            # SEO поля на казахском
+            "seo_title_kk": truncate_text(translations['kk']['title'], 255),
+            "seo_description_kk": truncate_text(translations['kk']['subtitle'], 500),
+            "seo_keywords_kk": seo_keywords['kk'],
+
+            # SEO поля на английском
+            "seo_title_en": truncate_text(translations['en']['title'], 255),
+            "seo_description_en": truncate_text(translations['en']['subtitle'], 500),
+            "seo_keywords_en": seo_keywords['en'],
+
+            # SEO поля на китайском
+            "seo_title_zh": truncate_text(translations['zh']['title'], 255),
+            "seo_description_zh": truncate_text(translations['zh']['subtitle'], 500),
+            "seo_keywords_zh": seo_keywords['zh'],
+
+            # Дополнительные поля
+            "date_publication": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+            "Accept-Language": "ru"
+        }
+
+        # Проверяем длину критических полей перед отправкой
+        critical_fields = {
+            'title': payload['title'],
+            'subtitle': payload['subtitle'],
+            'title_kk': payload['title_kk'],
+            'subtitle_kk': payload['subtitle_kk'],
+            'title_en': payload['title_en'],
+            'subtitle_en': payload['subtitle_en'],
+            'title_zh': payload['title_zh'],
+            'subtitle_zh': payload['subtitle_zh']
+        }
+
+        for field_name, field_value in critical_fields.items():
+            if len(field_value) > 255:
+                print(f"⚠️ Поле {field_name} слишком длинное: {len(field_value)} символов")
+                print(f"Значение: {field_value}")
+
+        print(f"📊 Отправляем данные:")
+        print(f"   Заголовок RU: '{payload['title']}' ({len(payload['title'])} симв.)")
+        print(f"   Подзаголовок RU: '{payload['subtitle']}' ({len(payload['subtitle'])} симв.)")
+        print(f"   Заголовок KK: '{payload['title_kk']}' ({len(payload['title_kk'])} симв.)")
+        print(f"   Заголовок EN: '{payload['title_en']}' ({len(payload['title_en'])} симв.)")
+        print(f"   Заголовок ZH: '{payload['title_zh']}' ({len(payload['title_zh'])} симв.)")
+        print(f"   Image URI: '{payload['image_uri']}'")
+
+        response = requests.post(news_url, json=payload, headers=headers, timeout=30)
 
         print(f"📡 Ответ сервера: {response.status_code}")
 
-        if response.status_code == 500:
-            print("❌ Ошибка 500 - внутренняя ошибка сервера")
-
-            # Сохраняем ошибку для анализа
-            error_content = response.text
-            with open("error_multilingual_upload.html", "w", encoding="utf-8") as f:
-                f.write(error_content)
-            print("🔍 Детали ошибки сохранены в error_multilingual_upload.html")
-
-            return False
-
-        if response.status_code in (200, 302):
-            if response.status_code == 302:
-                location = response.headers.get('Location', '')
-                if 'admin/news' in location or 'success' in location.lower():
-                    print("✅ Мультиязычная новость успешно создана!")
-                    return True
-                else:
-                    print(f"⚠️ Редирект на: {location}")
-                    return True
-
-            # Проверяем успешность по содержимому
-            success_indicators = ['успех', 'success', 'создан', 'created']
-            if any(indicator in response.text.lower() for indicator in success_indicators):
-                print("✅ Мультиязычная новость успешно создана!")
-                return True
-
-            # Если нет явных ошибок, считаем успешным
-            error_indicators = ['error', 'ошибка', 'exception', 'invalid']
-            if not any(indicator in response.text.lower() for indicator in error_indicators):
-                print("✅ Мультиязычная новость создана (нет ошибок в ответе)!")
-                return True
-
-            print("⚠️ Возможная ошибка в ответе")
-            return False
+        if response.status_code == 201:
+            result_data = response.json()
+            print("✅ Новость успешно создана через API!")
+            print(f"🎉 ID новости: {result_data.get('data', {}).get('id', 'N/A')}")
+            return True
         else:
-            print(f"❌ Ошибка публикации мультиязычной новости: {response.status_code}")
+            print(f"❌ Ошибка создания новости: {response.status_code}")
+            print(f"Ответ сервера: {response.text}")
+
+            # Если токен просрочен, пробуем перелогиниться
+            if response.status_code == 401:
+                print("🔄 Токен устарел, пробуем переаутентифицироваться...")
+                if login_to_api():
+                    # Повторяем запрос с новым токеном
+                    headers["Authorization"] = f"Bearer {access_token}"
+                    response = requests.post(news_url, json=payload, headers=headers, timeout=30)
+
+                    if response.status_code == 201:
+                        print("✅ Новость успешно создана после переаутентификации!")
+                        return True
+
             return False
 
     except Exception as e:
-        print(f"❌ Ошибка при отправке мультиязычной новости: {e}")
+        print(f"❌ Ошибка при создании новости: {e}")
         return False
 
 
 def post_news_to_site(news_text: str, image_path: str = None) -> bool:
-    """Основная функция публикации новости (теперь с мультиязычной поддержкой)"""
-    return post_news_to_site_multilingual(news_text, image_path)
+    """Основная функция публикации новости через API"""
+
+    # Шаг 1: Аутентификация
+    if not login_to_api():
+        print("❌ Не удалось аутентифицироваться в API")
+        return False
+
+    # Шаг 2: Извлечение заголовка и текста
+    title, body = extract_title_and_body(news_text)
+
+    # Шаг 3: Загрузка изображения
+    image_uri = None
+    if image_path and os.path.exists(image_path):
+        image_uri = upload_image(image_path)
+        if not image_uri:
+            print("⚠️ Продолжаем без изображения")
+    else:
+        print("⚠️ Путь к изображению не указан или файл не существует")
+
+    # Шаг 4: Перевод контента
+    print("🔄 Начинаем перевод контента...")
+    translations = translate_news_content(title, body)
+
+    # Шаг 5: Создание новости
+    subtitle = truncate_text(body, 200)  # Короткий подзаголовок
+    success = create_news_api(title, body, subtitle, image_uri, translations)
+
+    if success:
+        print("🎉 Новость успешно опубликована на сайте через API!")
+    else:
+        print("❌ Не удалось опубликовать новость на сайте")
+
+    return success
 
 
 def post_news_to_site_simple(news_text: str, image_path: str = None) -> bool:
-    """Простая версия без перевода (для обратной совместимости)"""
-    if not login_to_site():
+    """Простая версия публикации (только русский язык)"""
+
+    if not login_to_api():
         return False
 
-    csrf_token = get_csrf_token_for_create()
-    if not csrf_token:
-        return False
-
-    create_url = f"{SITE_URL}/admin/news"
     title, body = extract_title_and_body(news_text)
 
-    print("🔄 Используем простую публикацию (только русский)...")
+    image_uri = None
+    if image_path and os.path.exists(image_path):
+        image_uri = upload_image(image_path)
 
-    # ОПТИМАЛЬНЫЕ ДЛИНЫ ДЛЯ ПОЛЕЙ VOYAGER:
-    title = truncate_text(title, 80)
-    subtitle = truncate_text(body, 120)
-    seo_title = truncate_text(title, 55)
-    seo_description = truncate_text(body, 155)
-    seo_keywords = truncate_text("агро, сельское хозяйство, АПК, новости сельского хозяйства", 200)
-
-    # ПРАВИЛЬНЫЙ формат для ВСЕХ translatable полей в Voyager
-    data = {
-        "_token": csrf_token,
-        "i18n_selector": "ru",
-
-        # ВСЕ translatable поля в правильном формате для Voyager
-        "title_i18n": json.dumps({"ru": title, "kk": "", "en": "", "zh": ""}),
-        "subtitle_i18n": json.dumps({"ru": subtitle, "kk": "", "en": "", "zh": ""}),
-        "description_i18n": json.dumps({"ru": body, "kk": "", "en": "", "zh": ""}),
-        "seo_title_i18n": json.dumps({"ru": seo_title, "kk": "", "en": "", "zh": ""}),
-        "seo_description_i18n": json.dumps({"ru": seo_description, "kk": "", "en": "", "zh": ""}),
-        "seo_keywords_i18n": json.dumps({"ru": seo_keywords, "kk": "", "en": "", "zh": ""}),
-
-        # Также отправляем обычные поля
-        "title": title,
-        "subtitle": subtitle,
-        "description": body,
-        "seo_title": seo_title,
-        "seo_description": seo_description,
-        "seo_keywords": seo_keywords,
-
-        # Дополнительные поля
-        "status": "PUBLISHED",
-        "published_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-
-        # Системные поля
-        "redirect_to": "",
-        "model_name": "App\\Models\\News",
-        "model_id": "",
-        "type_slug": "news",
+    # Создаем минимальные переводы (только русский)
+    short_subtitle = truncate_text(body, 200)
+    translations = {
+        'ru': {
+            'title': title,
+            'description': body,
+            'subtitle': short_subtitle
+        },
+        'kk': {
+            'title': title,
+            'description': body,
+            'subtitle': short_subtitle
+        },
+        'en': {
+            'title': title,
+            'description': body,
+            'subtitle': short_subtitle
+        },
+        'zh': {
+            'title': title,
+            'description': body,
+            'subtitle': short_subtitle
+        }
     }
 
-    files = {}
-    if image_path and os.path.exists(image_path):
-        try:
-            image_filename = os.path.basename(image_path)
-            files["image"] = (image_filename, open(image_path, "rb"), 'image/jpeg')
-        except Exception as e:
-            print(f"⚠️ Не удалось открыть изображение: {e}")
+    return create_news_api(title, body, short_subtitle, image_uri, translations)
 
-    try:
-        response = session.post(create_url, data=data, files=files, timeout=30)
 
-        if files:
-            files["image"].close()
+# Функции для обратной совместимости
+def login_to_site() -> bool:
+    """Старая функция для обратной совместимости"""
+    return login_to_api()
 
-        print(f"📡 Ответ сервера: {response.status_code}")
 
-        if response.status_code in (200, 302):
-            print("✅ Новость успешно создана!")
-            return True
-        else:
-            print(f"❌ Ошибка публикации: {response.status_code}")
-            return False
-
-    except Exception as e:
-        print(f"❌ Ошибка при отправке новости: {e}")
-        return False
+def get_csrf_token_for_create() -> str:
+    """Заглушка для обратной совместимости"""
+    return ""
 
 
 def check_required_fields():
-    """Проверяет обязательные поля формы"""
-    if not login_to_site():
-        return
-
-    create_url = f"{SITE_URL}/admin/news/create"
-    try:
-        resp = session.get(create_url, timeout=10)
-        soup = BeautifulSoup(resp.text, "html.parser")
-
-        print("🔍 Поиск обязательных полей:")
-
-        # Ищем поля с атрибутом required
-        required_fields = []
-        all_inputs = soup.find_all('input')
-        all_textareas = soup.find_all('textarea')
-        all_selects = soup.find_all('select')
-
-        for field in all_inputs + all_textareas + all_selects:
-            if field.get('required'):
-                name = field.get('name', 'без имени')
-                required_fields.append(name)
-                field_type = field.name
-                print(f"⚠️ Обязательное поле: {name} (тип: {field_type})")
-
-        if not required_fields:
-            print("✅ Обязательных полей не найдено")
-
-        return required_fields
-
-    except Exception as e:
-        print(f"❌ Ошибка проверки полей: {e}")
-        return []
+    """Заглушка для обратной совместимости"""
+    return []
