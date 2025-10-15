@@ -10,6 +10,11 @@ from translator_libre import translate_text
 session = requests.Session()
 
 
+def truncate_text(text: str, max_length: int) -> str:
+    """Обрезает текст до максимальной длины, сохраняя слова"""
+    if len(text) <= max_length:
+        return text
+    return text[:max_length - 3].rsplit(' ', 1)[0] + "..."
 
 
 def translate_news_content(title: str, body: str, subtitle: str = "") -> dict:
@@ -21,7 +26,7 @@ def translate_news_content(title: str, body: str, subtitle: str = "") -> dict:
         'ru': {
             'title': title,
             'body': body,
-            'subtitle': subtitle if subtitle else body[:120] + "..." if len(body) > 120 else body
+            'subtitle': subtitle if subtitle else truncate_text(body, 120)
         }
     }
 
@@ -30,18 +35,20 @@ def translate_news_content(title: str, body: str, subtitle: str = "") -> dict:
 
     for lang in target_languages:
         try:
-            # Переводим заголовок
-            translated_title = translate_text(title, lang)
+            # Переводим заголовок (ограничиваем длину)
+            translated_title = translate_text(truncate_text(title, 80), lang)
+            translated_title = truncate_text(translated_title, 80)
 
             # Переводим основной текст
             translated_body = translate_text(body, lang)
 
-            # Переводим подзаголовок (если есть) или создаем из тела
+            # Создаем подзаголовок из переведенного текста (ограничиваем длину)
             if subtitle:
-                translated_subtitle = translate_text(subtitle, lang)
+                translated_subtitle = translate_text(truncate_text(subtitle, 120), lang)
             else:
-                # Создаем подзаголовок из переведенного текста
-                translated_subtitle = translated_body[:120] + "..." if len(translated_body) > 120 else translated_body
+                translated_subtitle = truncate_text(translated_body, 120)
+
+            translated_subtitle = truncate_text(translated_subtitle, 120)
 
             translations[lang] = {
                 'title': translated_title,
@@ -49,13 +56,16 @@ def translate_news_content(title: str, body: str, subtitle: str = "") -> dict:
                 'subtitle': translated_subtitle
             }
 
+            print(
+                f"✅ Перевод на {lang}: заголовок {len(translated_title)} симв, подзаголовок {len(translated_subtitle)} симв")
+
         except Exception as e:
             print(f"❌ Критическая ошибка перевода на {lang}: {e}")
-            # В случае ошибки используем оригинальный текст
+            # В случае ошибки используем оригинальный текст с ограничением длины
             translations[lang] = {
-                'title': title,
+                'title': truncate_text(title, 80),
                 'body': body,
-                'subtitle': subtitle if subtitle else body[:120] + "..." if len(body) > 120 else body
+                'subtitle': truncate_text(subtitle if subtitle else body, 120)
             }
 
     return translations
@@ -118,14 +128,13 @@ def extract_title_and_body(text: str):
 
     # Очищаем и ограничиваем заголовок
     title = re.sub(r'\s+', ' ', title)  # Заменяем множественные пробелы на один
-    title = title[:80]  # Оптимальная длина для заголовка
+    title = truncate_text(title, 80)  # Оптимальная длина для заголовка
 
     # Очищаем тело текста
     body = re.sub(r'\s+', ' ', body)  # Заменяем множественные пробелы на один
 
     print(f"📄 Извлечен заголовок ({len(title)} символов): {title}")
     print(f"📄 Извлечен текст: {len(body)} символов")
-    print(f"📄 Подзаголовок ({len(body[:120])} символов): {body[:120]}...")
 
     return title, body
 
@@ -185,7 +194,7 @@ def get_csrf_token_for_create() -> str:
 
 
 def post_news_to_site_multilingual(news_text: str, image_path: str = None) -> bool:
-    """Улучшенная версия с мультиязычной поддержкой"""
+    """Улучшенная версия с мультиязычной поддержкой и ограничением длины"""
     if not login_to_site():
         return False
 
@@ -201,20 +210,12 @@ def post_news_to_site_multilingual(news_text: str, image_path: str = None) -> bo
     # Получаем переводы для всех языков
     translations = translate_news_content(title, body)
 
-    # Создаем подзаголовки для каждого языка
-    subtitles = {}
-    for lang, content in translations.items():
-        body_text = content['body']
-        subtitles[lang] = body_text[:120].strip()
-        if len(body_text) > 120:
-            subtitles[lang] += "..."
-
     # SEO настройки (переводим только ключевые слова)
     seo_keywords_translations = {
-        'ru': "агро, сельское хозяйство, АПК, новости сельского хозяйства",
-        'en': "agro, agriculture, agro-industrial complex, agricultural news",
-        'kk': "агро, ауыл шаруашылығы, АӘК, ауыл шаруашылығы жаңалықтары",
-        'zh': "农业, 农业综合企业, 农工综合体, 农业新闻"
+        'ru': truncate_text("агро, сельское хозяйство, АПК, новости сельского хозяйства", 200),
+        'en': truncate_text("agro, agriculture, agro-industrial complex, agricultural news", 200),
+        'kk': truncate_text("агро, ауыл шаруашылығы, АӘК, ауыл шаруашылығы жаңалықтары", 200),
+        'zh': truncate_text("农业, 农业综合企业, 农工综合体, 农业新闻", 200)
     }
 
     print("📊 Подготавливаем мультиязычные данные...")
@@ -224,18 +225,18 @@ def post_news_to_site_multilingual(news_text: str, image_path: str = None) -> bo
         "_token": csrf_token,
         "i18n_selector": "ru",
 
-        # Мультиязычные поля в правильном формате для Voyager
+        # Мультиязычные поля в правильном формате для Voyager с ограничением длины
         "title_i18n": json.dumps({
-            "ru": translations['ru']['title'],
-            "en": translations['en']['title'],
-            "kk": translations['kk']['title'],
-            "zh": translations['zh']['title']
+            "ru": truncate_text(translations['ru']['title'], 80),
+            "en": truncate_text(translations['en']['title'], 80),
+            "kk": truncate_text(translations['kk']['title'], 80),
+            "zh": truncate_text(translations['zh']['title'], 80)
         }),
         "subtitle_i18n": json.dumps({
-            "ru": subtitles['ru'],
-            "en": subtitles['en'],
-            "kk": subtitles['kk'],
-            "zh": subtitles['zh']
+            "ru": truncate_text(translations['ru']['subtitle'], 120),
+            "en": truncate_text(translations['en']['subtitle'], 120),
+            "kk": truncate_text(translations['kk']['subtitle'], 120),
+            "zh": truncate_text(translations['zh']['subtitle'], 120)
         }),
         "description_i18n": json.dumps({
             "ru": translations['ru']['body'],
@@ -244,16 +245,16 @@ def post_news_to_site_multilingual(news_text: str, image_path: str = None) -> bo
             "zh": translations['zh']['body']
         }),
         "seo_title_i18n": json.dumps({
-            "ru": translations['ru']['title'][:55],
-            "en": translations['en']['title'][:55],
-            "kk": translations['kk']['title'][:55],
-            "zh": translations['zh']['title'][:55]
+            "ru": truncate_text(translations['ru']['title'], 55),
+            "en": truncate_text(translations['en']['title'], 55),
+            "kk": truncate_text(translations['kk']['title'], 55),
+            "zh": truncate_text(translations['zh']['title'], 55)
         }),
         "seo_description_i18n": json.dumps({
-            "ru": subtitles['ru'][:155],
-            "en": subtitles['en'][:155],
-            "kk": subtitles['kk'][:155],
-            "zh": subtitles['zh'][:155]
+            "ru": truncate_text(translations['ru']['subtitle'], 155),
+            "en": truncate_text(translations['en']['subtitle'], 155),
+            "kk": truncate_text(translations['kk']['subtitle'], 155),
+            "zh": truncate_text(translations['zh']['subtitle'], 155)
         }),
         "seo_keywords_i18n": json.dumps({
             "ru": seo_keywords_translations['ru'],
@@ -263,11 +264,11 @@ def post_news_to_site_multilingual(news_text: str, image_path: str = None) -> bo
         }),
 
         # Также отправляем обычные поля (для русского языка как fallback)
-        "title": translations['ru']['title'],
-        "subtitle": subtitles['ru'],
+        "title": truncate_text(translations['ru']['title'], 80),
+        "subtitle": truncate_text(translations['ru']['subtitle'], 120),
         "description": translations['ru']['body'],
-        "seo_title": translations['ru']['title'][:55],
-        "seo_description": subtitles['ru'][:155],
+        "seo_title": truncate_text(translations['ru']['title'], 55),
+        "seo_description": truncate_text(translations['ru']['subtitle'], 155),
         "seo_keywords": seo_keywords_translations['ru'],
 
         # Дополнительные поля
@@ -381,15 +382,11 @@ def post_news_to_site_simple(news_text: str, image_path: str = None) -> bool:
     print("🔄 Используем простую публикацию (только русский)...")
 
     # ОПТИМАЛЬНЫЕ ДЛИНЫ ДЛЯ ПОЛЕЙ VOYAGER:
-    title = title[:80]
-    subtitle = body[:120].strip()
-    if len(body) > 120:
-        subtitle += "..."
-    seo_title = title[:55]
-    seo_description = body[:155].strip()
-    if len(body) > 155:
-        seo_description += "..."
-    seo_keywords = "агро, сельское хозяйство, АПК, новости сельского хозяйства"
+    title = truncate_text(title, 80)
+    subtitle = truncate_text(body, 120)
+    seo_title = truncate_text(title, 55)
+    seo_description = truncate_text(body, 155)
+    seo_keywords = truncate_text("агро, сельское хозяйство, АПК, новости сельского хозяйства", 200)
 
     # ПРАВИЛЬНЫЙ формат для ВСЕХ translatable полей в Voyager
     data = {
