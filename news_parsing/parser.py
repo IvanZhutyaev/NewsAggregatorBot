@@ -364,14 +364,14 @@ async def scheduler():
                 if success:
                     # После успешной обработки ждем перед следующей
                     print("⏳ Ожидаем решения админа перед следующей новостью...")
-                    await asyncio.sleep(10)  # Ждем 30 секунд перед следующей новостью
+                    await asyncio.sleep(10)  # Ждем 10 секунд перед следующей новостью
                 else:
                     # В случае ошибки ждем меньше
                     await asyncio.sleep(10)
             else:
                 # Если очередь пуста, ждем дольше
                 print("⏰ Очередь пуста, следующая проверка через 5 минут...")
-                await asyncio.sleep(60)  # 5 минут
+                await asyncio.sleep(60)  # 1 минут
 
         except Exception as e:
             print(f"❌ Ошибка в планировщике: {e}")
