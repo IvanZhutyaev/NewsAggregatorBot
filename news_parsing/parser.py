@@ -237,16 +237,14 @@ async def process_entry(entry):
     # Потом пытаемся получить полный текст статьи
     full_article = get_full_article(link)
 
-    # Выбираем лучший источник текста
-    if full_article and len(full_article) > 100:
+    # В parser.py изменить условия:
+    if full_article and len(full_article) > 50:  # было 100
         body = full_article
-        print("✅ Используем полный текст статьи")
-    elif rss_description and len(rss_description) > 50:
+    elif rss_description and len(rss_description) > 30:  # было 50
         body = rss_description
-        print("✅ Используем текст из RSS описания")
     else:
-        body = ""
-        print("❌ Текст не найден ни в статье, ни в RSS")
+        # Вместо пустого текста используем заголовок
+        body = title
 
     return paraphrase_with_deepseek(title, body)
 
@@ -351,7 +349,7 @@ async def scheduler():
 
                 for url in sites:
                     try:
-                        added = await parse_feed_and_process(url, limit=2)  # Ограничиваем количество
+                        added = await parse_feed_and_process(url, limit=10)  # Ограничиваем количество
                         total_added += added
                         print(f"✅ Добавлено {added} новостей из {url}")
                         await asyncio.sleep(2)  # Задержка между сайтами
@@ -366,14 +364,14 @@ async def scheduler():
                 if success:
                     # После успешной обработки ждем перед следующей
                     print("⏳ Ожидаем решения админа перед следующей новостью...")
-                    await asyncio.sleep(30)  # Ждем 30 секунд перед следующей новостью
+                    await asyncio.sleep(10)  # Ждем 30 секунд перед следующей новостью
                 else:
                     # В случае ошибки ждем меньше
                     await asyncio.sleep(10)
             else:
                 # Если очередь пуста, ждем дольше
                 print("⏰ Очередь пуста, следующая проверка через 5 минут...")
-                await asyncio.sleep(300)  # 5 минут
+                await asyncio.sleep(60)  # 5 минут
 
         except Exception as e:
             print(f"❌ Ошибка в планировщике: {e}")

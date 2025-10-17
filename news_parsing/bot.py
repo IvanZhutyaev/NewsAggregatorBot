@@ -495,6 +495,24 @@ async def cmd_post_latest(message: types.Message):
         await message.answer(f"🎯 Всего добавлено в очередь: {posted} новостей")
 
 
+# Добавьте эту команду в bot.py для ручного запуска
+@dp.message(Command("force_check"))
+async def cmd_force_check(message: types.Message):
+    if not is_admin(message.from_user.id):
+        return
+
+    await message.answer("🔄 Принудительная проверка всех RSS...")
+    sites = await get_sites()
+    total_added = 0
+
+    for url in sites:
+        from parser import parse_feed_and_process
+        added = await parse_feed_and_process(url, limit=15)  # Больше новостей
+        total_added += added
+        await asyncio.sleep(1)
+
+    await message.answer(f"✅ Добавлено {total_added} новостей в очередь")
+
 # Обработчик для любых других сообщений
 @dp.message()
 async def handle_other_messages(message: types.Message):
