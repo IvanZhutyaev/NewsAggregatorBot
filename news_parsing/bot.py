@@ -96,10 +96,19 @@ async def approve_processed_news(callback: types.CallbackQuery):
         return
 
     photo = FSInputFile(image_path)
-    caption = news_text
 
     try:
-        await bot.send_photo(CHANNEL_ID, photo, caption=caption, parse_mode="HTML")
+        # Сначала отправляем фото с началом текста (если текст короткий)
+        if len(news_text) <= 1024:
+            # Если текст помещается в подпись к фото
+            await bot.send_photo(CHANNEL_ID, photo, caption=news_text, parse_mode="HTML")
+        else:
+            # Если текст длинный - отправляем фото без текста, а текст отдельно
+            await bot.send_photo(CHANNEL_ID, photo)
+            # Отправляем текст частями
+            from news_sender import send_long_message
+            await send_long_message(CHANNEL_ID, news_text, "")
+
     except Exception as e:
         print("❌ Ошибка отправки в канал:", e)
         await callback.message.answer("❌ Не удалось отправить новость в канал.")
