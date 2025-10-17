@@ -37,7 +37,7 @@ async def approve_raw_news(callback: types.CallbackQuery):
     except Exception:
         pass
 
-    # Обрабатываем через DeepSeek
+    # ТЕПЕРЬ обрабатываем через DeepSeek (после одобрения)
     from parser import process_with_deepseek
     processed_text = await process_with_deepseek(data["title"], data["text"])
 

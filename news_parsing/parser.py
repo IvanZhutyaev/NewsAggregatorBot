@@ -253,20 +253,33 @@ async def process_entry(entry):
 
 # Парсинг фида и обработка новостей
 async def parse_feed_and_process(url: str, limit: int = 5) -> int:
-    """Парсит RSS и добавляет новости в очередь"""
+    """Парсит RSS и добавляет новости в очередь с ОРИГИНАЛЬНЫМ текстом"""
     feed = feedparser.parse(url)
     added_to_queue = 0
 
     for entry in feed.entries[:limit]:
-        link = getattr(entry, "link", "")
+        link = getattr(entry, 'link', '')
 
-        # Проверяем не опубликована ли новость
         if not await is_news_published(link):
             print(f"📥 Добавляем новость в очередь: {getattr(entry, 'title', 'Без названия')}")
 
-            # Обрабатываем новость для получения текста
-            news_text = await process_entry(entry)
-            title = getattr(entry, "title", "Без названия")
+            # Получаем ОРИГИНАЛЬНЫЙ текст (без DeepSeek обработки)
+            title = getattr(entry, 'title', 'Без названия')
+
+            # Получаем оригинальный текст статьи
+            rss_description = getattr(entry, "summary", getattr(entry, "description", ""))
+            if rss_description:
+                rss_description = clean_text(rss_description)
+
+            full_article = get_full_article(link)
+
+            # Выбираем лучший источник текста
+            if full_article and len(full_article) > 100:
+                original_text = full_article
+            elif rss_description and len(rss_description) > 50:
+                original_text = rss_description
+            else:
+                original_text = ""
 
             # Получаем путь к случайному изображению
             import os
@@ -274,11 +287,11 @@ async def parse_feed_and_process(url: str, limit: int = 5) -> int:
             image_files = os.listdir("images")
             image_path = os.path.join("images", random.choice(image_files)) if image_files else None
 
-            # Добавляем в очередь
-            await add_to_queue(link, title, news_text, image_path)
+            # Добавляем в очередь ОРИГИНАЛЬНЫЙ текст
+            await add_to_queue(link, title, original_text, image_path)
             added_to_queue += 1
 
-            await asyncio.sleep(0.5)  # Небольшая задержка
+            await asyncio.sleep(0.5)
 
     return added_to_queue
 
@@ -291,7 +304,7 @@ async def check_news_and_send():
 
 
 async def process_next_from_queue():
-    """Обрабатывает следующую новость из очереди"""
+    """Обрабатывает следующую новость из очереди - отправляет ОРИГИНАЛЬНЫЙ текст"""
     try:
         await clear_stuck_processing()
         queue_item = await get_next_from_queue()
@@ -304,8 +317,8 @@ async def process_next_from_queue():
         print(f"🎯 Обрабатываем новость из очереди: {title}")
         print(f"🔗 Ссылка: {link}")
 
-        # Теперь отправляем СЫРУЮ новость на первичное одобрение
-        await send_raw_news_to_admin(title, news_text, link)
+        # Отправляем СЫРУЮ (оригинальную) новость на первичное одобрение
+        await send_raw_news_to_admin(title, news_text, link)  # news_text - оригинальный
 
         # Помечаем как отправленную на модерацию
         await mark_news_sent(link)

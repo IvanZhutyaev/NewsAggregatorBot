@@ -40,7 +40,6 @@ async def send_raw_news_to_admin(title: str, news_text: str, source_url: str):
 
             photo = FSInputFile(image_path)
             admin_caption = f"<b>{title}</b>\n\n{news_text}\n\n🔗 Источник: {source_url}"
-
             # Отправляем ВСЕМ админам
             sent_to_admins = 0
             for admin_id in ADMINS:
