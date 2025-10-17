@@ -3,7 +3,7 @@ import requests
 import json
 from datetime import datetime
 from config import SITE_URL, SITE_LOGIN, SITE_PASSWORD
-from translator_libre import translate_text
+
 
 # Базовый URL API
 BASE_API_URL = "https://api.demo.agrosearch.kz/api"
@@ -115,8 +115,7 @@ def upload_image(image_path: str) -> str:
 
 def translate_news_content(title: str, body: str) -> dict:
     """
-    Переводит все компоненты новости на три языка
-    Возвращает словарь с переводами
+    Возвращает контент только на русском языке (без перевода)
     """
     # Создаем короткий подзаголовок из первых 200 символов тела текста
     short_subtitle = truncate_text(body, 200)
@@ -126,46 +125,25 @@ def translate_news_content(title: str, body: str) -> dict:
             'title': truncate_text(title, 255),
             'description': body,
             'subtitle': short_subtitle
+        },
+        'kk': {
+            'title': truncate_text(title, 255),
+            'description': body,
+            'subtitle': short_subtitle
+        },
+        'en': {
+            'title': truncate_text(title, 255),
+            'description': body,
+            'subtitle': short_subtitle
+        },
+        'zh': {
+            'title': truncate_text(title, 255),
+            'description': body,
+            'subtitle': short_subtitle
         }
     }
 
-    # Языки для перевода
-    target_languages = ['en', 'kk', 'zh']
-
-    for lang in target_languages:
-        try:
-            print(f"🔄 Переводим на {lang}...")
-
-            # Переводим заголовок
-            translated_title = translate_text(translations['ru']['title'], lang)
-            translated_title = truncate_text(translated_title, 255)
-
-            # Переводим основной текст
-            translated_description = translate_text(body, lang)
-
-            # Переводим подзаголовок (короткий)
-            translated_subtitle = translate_text(short_subtitle, lang)
-            translated_subtitle = truncate_text(translated_subtitle, 255)  # Ограничиваем до 255 символов
-
-            translations[lang] = {
-                'title': translated_title,
-                'description': translated_description,
-                'subtitle': translated_subtitle
-            }
-
-            print(f"✅ Перевод на {lang} завершен")
-            print(f"   Заголовок: {translated_title}")
-            print(f"   Подзаголовок: {translated_subtitle}")
-
-        except Exception as e:
-            print(f"❌ Ошибка перевода на {lang}: {e}")
-            # В случае ошибки используем русский текст с ограничением длины
-            translations[lang] = {
-                'title': translations['ru']['title'],
-                'description': translations['ru']['description'],
-                'subtitle': translations['ru']['subtitle']
-            }
-
+    print("✅ Контент подготовлен только на русском языке (перевод отключен)")
     return translations
 
 
@@ -199,7 +177,7 @@ def extract_title_and_body(text: str):
 
 
 def create_news_api(title: str, description: str, subtitle: str, image_uri: str, translations: dict) -> bool:
-    """Создает новость через API"""
+    """Создает новость через API только на русском языке"""
     global access_token
 
     if not access_token:
@@ -209,59 +187,49 @@ def create_news_api(title: str, description: str, subtitle: str, image_uri: str,
     news_url = f"{BASE_API_URL}/content/news"
 
     try:
-        print("📤 Создаем новость через API...")
+        print("📤 Создаем новость через API (только русский язык)...")
 
-        # SEO настройки (ограничиваем длину)
-        seo_keywords = {
-            'ru': truncate_text("агро, сельское хозяйство, АПК, новости сельского хозяйства", 255),
-            'en': truncate_text("agro, agriculture, agro-industrial complex, agricultural news", 255),
-            'kk': truncate_text("агро, ауыл шаруашылығы, АӘК, ауыл шаруашылығы жаңалықтары", 255),
-            'zh': truncate_text("农业, 农业综合企业, 农工综合体, 农业新闻", 255)
-        }
+        # SEO настройки только на русском
+        seo_keywords = truncate_text("агро, сельское хозяйство, АПК, новости сельского хозяйства", 255)
 
-        # Подготовка данных для API с ограничениями длины
+        # Упрощенный payload только с русскими полями
         payload = {
             # Основные поля на русском
             "title": translations['ru']['title'],
             "description": translations['ru']['description'],
-            "subtitle": translations['ru']['subtitle'],  # Максимум 255 символов
+            "subtitle": translations['ru']['subtitle'],
             "image_uri": image_uri,
 
-            # Переводы на казахский
-            "title_kk": translations['kk']['title'],
-            "description_kk": translations['kk']['description'],
-            "subtitle_kk": translations['kk']['subtitle'],
+            # Остальные языки используем те же русские данные
+            "title_kk": translations['ru']['title'],
+            "description_kk": translations['ru']['description'],
+            "subtitle_kk": translations['ru']['subtitle'],
 
-            # Переводы на английский
-            "title_en": translations['en']['title'],
-            "description_en": translations['en']['description'],
-            "subtitle_en": translations['en']['subtitle'],
+            "title_en": translations['ru']['title'],
+            "description_en": translations['ru']['description'],
+            "subtitle_en": translations['ru']['subtitle'],
 
-            # Переводы на китайский
-            "title_zh": translations['zh']['title'],
-            "description_zh": translations['zh']['description'],
-            "subtitle_zh": translations['zh']['subtitle'],
+            "title_zh": translations['ru']['title'],
+            "description_zh": translations['ru']['description'],
+            "subtitle_zh": translations['ru']['subtitle'],
 
-            # SEO поля на русском
+            # SEO поля (все на русском)
             "seo_title": truncate_text(translations['ru']['title'], 255),
             "seo_description": truncate_text(translations['ru']['subtitle'], 500),
-            "seo_keywords": seo_keywords['ru'],
+            "seo_keywords": seo_keywords,
             "seo_image": image_uri,
 
-            # SEO поля на казахском
-            "seo_title_kk": truncate_text(translations['kk']['title'], 255),
-            "seo_description_kk": truncate_text(translations['kk']['subtitle'], 500),
-            "seo_keywords_kk": seo_keywords['kk'],
+            "seo_title_kk": truncate_text(translations['ru']['title'], 255),
+            "seo_description_kk": truncate_text(translations['ru']['subtitle'], 500),
+            "seo_keywords_kk": seo_keywords,
 
-            # SEO поля на английском
-            "seo_title_en": truncate_text(translations['en']['title'], 255),
-            "seo_description_en": truncate_text(translations['en']['subtitle'], 500),
-            "seo_keywords_en": seo_keywords['en'],
+            "seo_title_en": truncate_text(translations['ru']['title'], 255),
+            "seo_description_en": truncate_text(translations['ru']['subtitle'], 500),
+            "seo_keywords_en": seo_keywords,
 
-            # SEO поля на китайском
-            "seo_title_zh": truncate_text(translations['zh']['title'], 255),
-            "seo_description_zh": truncate_text(translations['zh']['subtitle'], 500),
-            "seo_keywords_zh": seo_keywords['zh'],
+            "seo_title_zh": truncate_text(translations['ru']['title'], 255),
+            "seo_description_zh": truncate_text(translations['ru']['subtitle'], 500),
+            "seo_keywords_zh": seo_keywords,
 
             # Дополнительные поля
             "date_publication": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -273,29 +241,9 @@ def create_news_api(title: str, description: str, subtitle: str, image_uri: str,
             "Accept-Language": "ru"
         }
 
-        # Проверяем длину критических полей перед отправкой
-        critical_fields = {
-            'title': payload['title'],
-            'subtitle': payload['subtitle'],
-            'title_kk': payload['title_kk'],
-            'subtitle_kk': payload['subtitle_kk'],
-            'title_en': payload['title_en'],
-            'subtitle_en': payload['subtitle_en'],
-            'title_zh': payload['title_zh'],
-            'subtitle_zh': payload['subtitle_zh']
-        }
-
-        for field_name, field_value in critical_fields.items():
-            if len(field_value) > 255:
-                print(f"⚠️ Поле {field_name} слишком длинное: {len(field_value)} символов")
-                print(f"Значение: {field_value}")
-
-        print(f"📊 Отправляем данные:")
-        print(f"   Заголовок RU: '{payload['title']}' ({len(payload['title'])} симв.)")
-        print(f"   Подзаголовок RU: '{payload['subtitle']}' ({len(payload['subtitle'])} симв.)")
-        print(f"   Заголовок KK: '{payload['title_kk']}' ({len(payload['title_kk'])} симв.)")
-        print(f"   Заголовок EN: '{payload['title_en']}' ({len(payload['title_en'])} симв.)")
-        print(f"   Заголовок ZH: '{payload['title_zh']}' ({len(payload['title_zh'])} симв.)")
+        print(f"📊 Отправляем данные (только русский язык):")
+        print(f"   Заголовок: '{payload['title']}' ({len(payload['title'])} симв.)")
+        print(f"   Подзаголовок: '{payload['subtitle']}' ({len(payload['subtitle'])} симв.)")
         print(f"   Image URI: '{payload['image_uri']}'")
 
         response = requests.post(news_url, json=payload, headers=headers, timeout=30)
@@ -304,21 +252,18 @@ def create_news_api(title: str, description: str, subtitle: str, image_uri: str,
 
         if response.status_code == 201:
             result_data = response.json()
-            print("✅ Новость успешно создана через API!")
+            print("✅ Новость успешно создана через API (только русский язык)!")
             print(f"🎉 ID новости: {result_data.get('data', {}).get('id', 'N/A')}")
             return True
         else:
             print(f"❌ Ошибка создания новости: {response.status_code}")
             print(f"Ответ сервера: {response.text}")
 
-            # Если токен просрочен, пробуем перелогиниться
             if response.status_code == 401:
                 print("🔄 Токен устарел, пробуем переаутентифицироваться...")
                 if login_to_api():
-                    # Повторяем запрос с новым токеном
                     headers["Authorization"] = f"Bearer {access_token}"
                     response = requests.post(news_url, json=payload, headers=headers, timeout=30)
-
                     if response.status_code == 201:
                         print("✅ Новость успешно создана после переаутентификации!")
                         return True
@@ -331,7 +276,7 @@ def create_news_api(title: str, description: str, subtitle: str, image_uri: str,
 
 
 def post_news_to_site(news_text: str, image_path: str = None) -> bool:
-    """Основная функция публикации новости через API"""
+    """Основная функция публикации новости через API (только русский язык)"""
 
     # Шаг 1: Аутентификация
     if not login_to_api():
@@ -350,16 +295,16 @@ def post_news_to_site(news_text: str, image_path: str = None) -> bool:
     else:
         print("⚠️ Путь к изображению не указан или файл не существует")
 
-    # Шаг 4: Перевод контента
-    print("🔄 Начинаем перевод контента...")
+    # Шаг 4: Подготовка контента (без перевода)
+    print("🔄 Подготавливаем контент (только русский язык)...")
     translations = translate_news_content(title, body)
 
     # Шаг 5: Создание новости
-    subtitle = truncate_text(body, 200)  # Короткий подзаголовок
+    subtitle = truncate_text(body, 200)
     success = create_news_api(title, body, subtitle, image_uri, translations)
 
     if success:
-        print("🎉 Новость успешно опубликована на сайте через API!")
+        print("🎉 Новость успешно опубликована на сайте (только русский язык)!")
     else:
         print("❌ Не удалось опубликовать новость на сайте")
 
