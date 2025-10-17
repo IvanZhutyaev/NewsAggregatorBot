@@ -9,7 +9,7 @@ from database import init_db, add_site, remove_site, get_sites, is_news_sent, ma
     get_queue_size, clear_stuck_processing
 from site_poster import post_news_to_site
 from news_sender import send_processed_news_to_admin, get_pending_raw_news, get_pending_processed_news, \
-    remove_from_pending_raw_news, remove_from_pending_processed_news
+    remove_from_pending_raw_news, remove_from_pending_processed_news, delete_news_messages
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -28,16 +28,14 @@ async def approve_raw_news(callback: types.CallbackQuery):
     _, news_id = callback.data.split("|", 1)
     data = get_pending_raw_news().get(news_id)
     if not data:
+        await delete_news_messages(callback.from_user.id, news_id)
         await callback.message.answer("❌ Новость не найдена.")
         return
 
-    try:
-        # Удаляем сообщение с сырой новостью
-        await callback.message.delete()
-    except Exception:
-        pass
+    # Удаляем все сообщения этой новости у админа
+    await delete_news_messages(callback.from_user.id, news_id)
 
-    # ТЕПЕРЬ обрабатываем через DeepSeek (после одобрения)
+    # Обрабатываем через DeepSeek
     from parser import process_with_deepseek
     processed_text = await process_with_deepseek(data["title"], data["text"])
 
@@ -61,12 +59,10 @@ async def reject_raw_news(callback: types.CallbackQuery):
 
     _, news_id = callback.data.split("|", 1)
 
-    remove_from_pending_raw_news(news_id)
+    # Удаляем все сообщения этой новости у админа
+    await delete_news_messages(callback.from_user.id, news_id)
 
-    try:
-        await callback.message.delete()
-    except Exception:
-        pass
+    remove_from_pending_raw_news(news_id)
 
     # Уведомляем ВСЕХ админов об отклонении
     for admin_id in ADMINS:
@@ -84,6 +80,7 @@ async def approve_processed_news(callback: types.CallbackQuery):
     _, news_id = callback.data.split("|", 1)
     data = get_pending_processed_news().get(news_id)
     if not data:
+        await delete_news_messages(callback.from_user.id, news_id)
         await callback.message.answer("❌ Новость не найдена.")
         return
 
@@ -92,6 +89,7 @@ async def approve_processed_news(callback: types.CallbackQuery):
 
     if not os.path.exists(image_path):
         print(f"❌ Файл не найден: {image_path}")
+        await delete_news_messages(callback.from_user.id, news_id)
         await callback.message.answer("❌ Изображение не найдено, новость не отправлена.")
         return
 
@@ -111,6 +109,7 @@ async def approve_processed_news(callback: types.CallbackQuery):
 
     except Exception as e:
         print("❌ Ошибка отправки в канал:", e)
+        await delete_news_messages(callback.from_user.id, news_id)
         await callback.message.answer("❌ Не удалось отправить новость в канал.")
         return
 
@@ -118,10 +117,8 @@ async def approve_processed_news(callback: types.CallbackQuery):
     await mark_news_published(data["url"])
     remove_from_pending_processed_news(news_id)
 
-    try:
-        await callback.message.delete()
-    except Exception:
-        pass
+    # Удаляем все сообщения этой новости у админа
+    await delete_news_messages(callback.from_user.id, news_id)
 
     # Уведомляем ВСЕХ админов о публикации
     for admin_id in ADMINS:
@@ -138,6 +135,7 @@ async def post_to_site(callback: types.CallbackQuery):
         _, news_id = callback.data.split("|", 1)
         data = get_pending_processed_news().get(news_id)
         if not data:
+            await delete_news_messages(callback.from_user.id, news_id)
             await callback.message.answer("❌ Новость не найдена.")
             return
 
@@ -145,6 +143,7 @@ async def post_to_site(callback: types.CallbackQuery):
         if success:
             await mark_news_published(data["url"])
             remove_from_pending_processed_news(news_id)
+            await delete_news_messages(callback.from_user.id, news_id)
             await callback.message.answer("🌐 Новость опубликована на сайте!")
 
             for admin_id in ADMINS:
@@ -153,9 +152,11 @@ async def post_to_site(callback: types.CallbackQuery):
                 except Exception:
                     pass
         else:
+            await delete_news_messages(callback.from_user.id, news_id)
             await callback.message.answer("❌ Ошибка при публикации на сайте.")
     except Exception as e:
         print(f"❌ Ошибка в post_to_site: {e}")
+        await delete_news_messages(callback.from_user.id, news_id)
         await callback.message.answer("❌ Произошла ошибка при публикации на сайте.")
 
 
@@ -166,6 +167,7 @@ async def post_to_both(callback: types.CallbackQuery):
         _, news_id = callback.data.split("|", 1)
         data = get_pending_processed_news().get(news_id)
         if not data:
+            await delete_news_messages(callback.from_user.id, news_id)
             await callback.message.answer("❌ Новость не найдена.")
             return
 
@@ -178,7 +180,12 @@ async def post_to_both(callback: types.CallbackQuery):
         # 2️⃣ Публикуем в Telegram
         try:
             photo = FSInputFile(image_path)
-            await bot.send_photo(CHANNEL_ID, photo, caption=text, parse_mode="HTML")
+            if len(text) <= 1024:
+                await bot.send_photo(CHANNEL_ID, photo, caption=text, parse_mode="HTML")
+            else:
+                await bot.send_photo(CHANNEL_ID, photo)
+                from news_sender import send_long_message
+                await send_long_message(CHANNEL_ID, text, "")
             success_tg = True
         except Exception as e:
             print("Ошибка публикации в Telegram:", e)
@@ -188,6 +195,7 @@ async def post_to_both(callback: types.CallbackQuery):
         if success_site or success_tg:
             await mark_news_published(data["url"])
             remove_from_pending_processed_news(news_id)
+            await delete_news_messages(callback.from_user.id, news_id)
 
             result_message = ""
             if success_site and success_tg:
@@ -204,9 +212,11 @@ async def post_to_both(callback: types.CallbackQuery):
                 except Exception:
                     pass
         else:
+            await delete_news_messages(callback.from_user.id, news_id)
             await callback.message.answer("⚠️ Ошибка при публикации (проверь лог).")
     except Exception as e:
         print(f"❌ Ошибка в post_to_both: {e}")
+        await delete_news_messages(callback.from_user.id, news_id)
         await callback.message.answer("❌ Произошла ошибка при публикации.")
 
 
@@ -219,12 +229,10 @@ async def reject_processed_news(callback: types.CallbackQuery):
 
     _, news_id = callback.data.split("|", 1)
 
-    remove_from_pending_processed_news(news_id)
+    # Удаляем все сообщения этой новости у админа
+    await delete_news_messages(callback.from_user.id, news_id)
 
-    try:
-        await callback.message.delete()
-    except Exception:
-        pass
+    remove_from_pending_processed_news(news_id)
 
     for admin_id in ADMINS:
         try:
@@ -232,6 +240,21 @@ async def reject_processed_news(callback: types.CallbackQuery):
         except Exception:
             pass
 
+async def delete_message_safe(callback: types.CallbackQuery):
+    """Безопасно удаляет сообщение, обрабатывая возможные ошибки"""
+    try:
+        await callback.message.delete()
+        print("✅ Сообщение с новостью удалено из чата")
+    except Exception as e:
+        print(f"⚠️ Не удалось удалить сообщение: {e}")
+        # Пробуем отредактировать сообщение, если удалить не получилось
+        try:
+            await callback.message.edit_text(
+                "🗑️ Новость обработана и удалена из чата",
+                reply_markup=None
+            )
+        except Exception:
+            pass
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):

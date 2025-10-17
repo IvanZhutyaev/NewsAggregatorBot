@@ -13,9 +13,9 @@ bot = Bot(token=BOT_TOKEN)
 # Глобальные словари для хранения состояний
 pending_raw_news = {}  # Для сырых новостей на одобрение
 pending_processed_news = {}  # Для обработанных новостей на финальную публикацию
+admin_message_ids = {}  # Для хранения ID всех сообщений новости по admin_id
 
 
-# Отправка сырой новости на первичное одобрение
 async def send_raw_news_to_admin(title: str, news_text: str, source_url: str):
     max_retries = 3
     for attempt in range(max_retries):
@@ -47,18 +47,29 @@ async def send_raw_news_to_admin(title: str, news_text: str, source_url: str):
             sent_to_admins = 0
             for admin_id in ADMINS:
                 try:
+                    # Инициализируем хранилище сообщений для этого admin_id и news_id
+                    if admin_id not in admin_message_ids:
+                        admin_message_ids[admin_id] = {}
+
+                    message_ids = []
+
                     # Сначала отправляем фото с заголовком
-                    await bot.send_photo(
+                    photo_message = await bot.send_photo(
                         admin_id,
                         photo,
                         caption=base_caption,
                         reply_markup=keyboard.as_markup(),
                         parse_mode="HTML"
                     )
+                    message_ids.append(photo_message.message_id)
 
                     # Затем отправляем текст новости частями (если он есть)
                     if news_text and len(news_text.strip()) > 0:
-                        await send_long_message(admin_id, news_text, "📝 Текст новости:")
+                        text_message_ids = await send_long_message(admin_id, news_text, "📝 Текст новости:")
+                        message_ids.extend(text_message_ids)
+
+                    # Сохраняем все ID сообщений для этой новости
+                    admin_message_ids[admin_id][news_id] = message_ids
 
                     print(f"✅ Сырая новость отправлена админу {admin_id}")
                     sent_to_admins += 1
@@ -116,18 +127,29 @@ async def send_processed_news_to_admin(news_text: str, source_url: str, original
             sent_to_admins = 0
             for admin_id in ADMINS:
                 try:
+                    # Инициализируем хранилище сообщений для этого admin_id и news_id
+                    if admin_id not in admin_message_ids:
+                        admin_message_ids[admin_id] = {}
+
+                    message_ids = []
+
                     # Сначала отправляем фото с заголовком
-                    await bot.send_photo(
+                    photo_message = await bot.send_photo(
                         admin_id,
                         photo,
                         caption=base_caption,
                         reply_markup=keyboard.as_markup(),
                         parse_mode="HTML"
                     )
+                    message_ids.append(photo_message.message_id)
 
                     # Затем отправляем обработанный текст частями
                     if news_text and len(news_text.strip()) > 0:
-                        await send_long_message(admin_id, news_text, "📄 Обработанный текст:")
+                        text_message_ids = await send_long_message(admin_id, news_text, "📄 Обработанный текст:")
+                        message_ids.extend(text_message_ids)
+
+                    # Сохраняем все ID сообщений для этой новости
+                    admin_message_ids[admin_id][news_id] = message_ids
 
                     print(f"✅ Обработанная новость отправлена админу {admin_id}")
                     sent_to_admins += 1
@@ -155,16 +177,19 @@ async def send_processed_news_to_admin(news_text: str, source_url: str, original
 
 async def send_long_message(chat_id: int, text: str, prefix: str = ""):
     """
-    Отправляет длинное сообщение частями
+    Отправляет длинное сообщение частями и возвращает ID сообщений
     """
     # Максимальная длина сообщения в Telegram
     MAX_MESSAGE_LENGTH = 4096
 
+    message_ids = []
+
     if not text or len(text) <= MAX_MESSAGE_LENGTH:
         # Если текст короткий, отправляем как есть
         message = f"{prefix}\n\n{text}" if prefix else text
-        await bot.send_message(chat_id, message, parse_mode="HTML")
-        return
+        sent_message = await bot.send_message(chat_id, message, parse_mode="HTML")
+        message_ids.append(sent_message.message_id)
+        return message_ids
 
     # Разбиваем текст на части
     parts = []
@@ -219,7 +244,8 @@ async def send_long_message(chat_id: int, text: str, prefix: str = ""):
             else:
                 message = part
 
-            await bot.send_message(chat_id, message, parse_mode="HTML")
+            sent_message = await bot.send_message(chat_id, message, parse_mode="HTML")
+            message_ids.append(sent_message.message_id)
 
             # Небольшая задержка между сообщениями
             if i < len(parts):
@@ -228,17 +254,45 @@ async def send_long_message(chat_id: int, text: str, prefix: str = ""):
         except Exception as e:
             print(f"❌ Ошибка отправки части {i}/{len(parts)}: {e}")
 
+    return message_ids
+
+
+async def delete_news_messages(admin_id: int, news_id: str):
+    """Удаляет все сообщения связанные с конкретной новостью у админа"""
+    try:
+        if admin_id in admin_message_ids and news_id in admin_message_ids[admin_id]:
+            message_ids = admin_message_ids[admin_id][news_id]
+            deleted_count = 0
+
+            for message_id in message_ids:
+                try:
+                    await bot.delete_message(admin_id, message_id)
+                    deleted_count += 1
+                    await asyncio.sleep(0.1)  # Небольшая задержка между удалениями
+                except Exception as e:
+                    print(f"⚠️ Не удалось удалить сообщение {message_id}: {e}")
+
+            # Удаляем запись о сообщениях
+            del admin_message_ids[admin_id][news_id]
+            print(f"✅ Удалено {deleted_count} сообщений новости у админа {admin_id}")
+
+    except Exception as e:
+        print(f"❌ Ошибка при удалении сообщений новости: {e}")
+
 
 # Геттеры для доступа к данным из других модулей
 def get_pending_raw_news():
     return pending_raw_news
 
+
 def get_pending_processed_news():
     return pending_processed_news
+
 
 def remove_from_pending_raw_news(news_id):
     if news_id in pending_raw_news:
         pending_raw_news.pop(news_id, None)
+
 
 def remove_from_pending_processed_news(news_id):
     if news_id in pending_processed_news:
