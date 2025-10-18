@@ -437,17 +437,81 @@ async def cmd_remove_site(message: types.Message):
 
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
-        await message.answer("❌ Укажи ссылку на RSS для удаления\nНапример: `/removesite https://example.com/rss`",
-                             parse_mode="Markdown")
+        await message.answer(
+            "❌ Укажи ссылки на RSS для удаления (можно несколько через запятую или с новой строки)\n\n"
+            "Примеры:\n"
+            "• `/removesite https://example1.com/rss, https://example2.com/rss`\n"
+            "• `/removesite https://example1.com/rss`\n"
+            "    `https://example2.com/rss`\n"
+            "    `https://example3.com/rss`\n\n"
+            "📋 Сначала посмотри список сайтов: /listsites",
+            parse_mode="Markdown"
+        )
         return
 
-    url = args[1].strip()
+    urls_text = args[1].strip()
 
-    try:
-        await remove_site(url)
-        await message.answer(f"✅ RSS-лента удалена:\n`{url}`", parse_mode="Markdown")
-    except Exception as e:
-        await message.answer(f"❌ Ошибка удаления: {e}")
+    # Разбиваем ссылки по разным разделителям
+    urls = []
+    for line in urls_text.split('\n'):
+        line = line.strip()
+        if not line:
+            continue
+        # Разбиваем по запятым в одной строке
+        for url in line.split(','):
+            url = url.strip()
+            if url:
+                urls.append(url)
+
+    if not urls:
+        await message.answer("❌ Не найдено валидных ссылок")
+        return
+
+    removed_urls = []
+    error_urls = []
+    not_found_urls = []
+
+    # Получаем текущий список сайтов для проверки
+    current_sites = await get_sites()
+
+    for url in urls:
+        # Проверяем, существует ли сайт в списке
+        if url not in current_sites:
+            not_found_urls.append(url)
+            continue
+
+        try:
+            await remove_site(url)
+            removed_urls.append(url)
+        except Exception as e:
+            error_urls.append(f"{url} ({str(e)})")
+
+    # Формируем ответ
+    result_message = ""
+
+    if removed_urls:
+        result_message += f"✅ Удалено {len(removed_urls)} RSS-лент:\n"
+        for url in removed_urls:
+            result_message += f"• `{url}`\n"
+
+    if not_found_urls:
+        if result_message:
+            result_message += "\n"
+        result_message += f"⚠️ Не найдено в списке ({len(not_found_urls)}):\n"
+        for url in not_found_urls:
+            result_message += f"• `{url}`\n"
+
+    if error_urls:
+        if result_message:
+            result_message += "\n"
+        result_message += f"❌ Ошибки удаления ({len(error_urls)}):\n"
+        for error in error_urls:
+            result_message += f"• {error}\n"
+
+    if not removed_urls and not not_found_urls and not error_urls:
+        result_message = "❌ Не удалось удалить ни одной RSS-ленты"
+
+    await message.answer(result_message, parse_mode="Markdown")
 
 
 @dp.message(Command("queue"))
