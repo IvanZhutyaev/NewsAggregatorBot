@@ -14,10 +14,26 @@ access_token = None
 
 
 def truncate_text(text: str, max_length: int) -> str:
-    """Обрезает текст до максимальной длины, сохраняя слова"""
+    """Обрезает текст до максимальной длины, сохраняя целые предложения"""
     if not text or len(text) <= max_length:
         return text
-    return text[:max_length - 3].rsplit(' ', 1)[0] + "..."
+
+    # Находим конец первого предложения
+    sentence_endings = ['.', '!', '?', '。', '！', '？']
+
+    # Ищем конец первого предложения в пределах max_length
+    for i in range(min(len(text), max_length)):
+        if text[i] in sentence_endings:
+            # Проверяем, что после точки пробел или конец текста
+            if i + 1 >= len(text) or text[i + 1] in [' ', '\n', '\r']:
+                return text[:i + 1]
+
+    # Если не нашли конец предложения, ищем ближайший пробел
+    last_space = text.rfind(' ', 0, max_length - 3)
+    if last_space > 0:
+        return text[:last_space] + "..."
+
+    return text[:max_length - 3] + "..."
 
 
 def login_to_api() -> bool:
