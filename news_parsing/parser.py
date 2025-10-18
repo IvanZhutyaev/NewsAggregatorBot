@@ -250,7 +250,7 @@ async def process_entry(entry):
 
 
 # Парсинг фида и обработка новостей
-async def parse_feed_and_process(url: str, limit: int = 5) -> int:
+async def parse_feed_and_process(url: str, limit: int = 20) -> int:
     """Парсит RSS и добавляет новости в очередь с ОРИГИНАЛЬНЫМ текстом"""
     feed = feedparser.parse(url)
     added_to_queue = 0
@@ -294,6 +294,23 @@ async def parse_feed_and_process(url: str, limit: int = 5) -> int:
     return added_to_queue
 
 
+async def process_multiple_from_queue():
+    """Обрабатывает несколько новостей одновременно"""
+    queue_size = await get_queue_size()
+    if queue_size == 0:
+        return 0
+
+    # Обрабатываем до 3 новостей одновременно
+    process_count = min(3, queue_size)
+    tasks = []
+
+    for _ in range(process_count):
+        task = asyncio.create_task(process_next_from_queue())
+        tasks.append(task)
+
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    return sum(1 for r in results if r is True)
+
 # Проверка новостей и отправка админу
 async def check_news_and_send():
     sites = await get_sites()
@@ -332,50 +349,56 @@ async def process_next_from_queue():
         if 'queue_item' in locals() and queue_item:
             await mark_queue_processed(queue_item[1])
         return False
-# Фоновая проверка
-async def scheduler():
-    """Новый планировщик с очередью"""
-    while True:
-        try:
-            # Проверяем размер очереди
-            queue_size = await get_queue_size()
-            print(f"📊 Размер очереди: {queue_size} новостей")
 
-            # Если очередь пуста, парсим новые новости
-            if queue_size == 0:
-                print("🔄 Очередь пуста, парсим новые новости...")
-                sites = await get_sites()
-                total_added = 0
-
-                for url in sites:
-                    try:
-                        added = await parse_feed_and_process(url, limit=10)  # Ограничиваем количество
-                        total_added += added
-                        print(f"✅ Добавлено {added} новостей из {url}")
-                        await asyncio.sleep(2)  # Задержка между сайтами
-                    except Exception as e:
-                        print(f"❌ Ошибка парсинга {url}: {e}")
-
-                print(f"🎯 Всего добавлено в очередь: {total_added} новостей")
-
-            # Обрабатываем следующую новость из очереди
-            if await get_queue_size() > 0:
-                success = await process_next_from_queue()
-                if success:
-                    # После успешной обработки ждем перед следующей
-                    print("⏳ Ожидаем решения админа перед следующей новостью...")
-                    await asyncio.sleep(10)  # Ждем 10 секунд перед следующей новостью
-                else:
-                    # В случае ошибки ждем меньше
-                    await asyncio.sleep(10)
-            else:
-                # Если очередь пуста, ждем дольше
-                print("⏰ Очередь пуста, следующая проверка через 5 минут...")
-                await asyncio.sleep(60)  # 1 минут
-
-        except Exception as e:
-            print(f"❌ Ошибка в планировщике: {e}")
-            await asyncio.sleep(60)  # Ждем минуту при ошибке
 async def process_with_deepseek(title: str, body: str) -> str:
     """Обработка текста через DeepSeek после одобрения сырой новости"""
     return paraphrase_with_deepseek(title, body)
+# Фоновая проверка
+async def scheduler():
+    """Улучшенный планировщик с независимой работой"""
+    print("🔄 Планировщик парсера запущен!")
+
+    while True:
+        try:
+            # Всегда сначала проверяем новые новости
+            sites = await get_sites()
+            if not sites:
+                print("⚠️ Нет RSS-лент для проверки. Используйте /addsite")
+                await asyncio.sleep(60)  # Ждем минуту если нет сайтов
+                continue
+
+            print(f"🔍 Проверяем {len(sites)} RSS-лент...")
+
+            total_added = 0
+            for url in sites:
+                try:
+                    added = await parse_feed_and_process(url, limit=15)
+                    total_added += added
+                    print(f"✅ Добавлено {added} новостей из {url}")
+                    await asyncio.sleep(1)  # Пауза между сайтами
+                except Exception as e:
+                    print(f"❌ Ошибка парсинга {url}: {e}")
+
+            if total_added > 0:
+                print(f"🎯 Всего добавлено в очередь: {total_added} новостей")
+            else:
+                print("ℹ️ Новых новостей не найдено")
+
+            # Обрабатываем очередь
+            queue_size = await get_queue_size()
+            if queue_size > 0:
+                print(f"📥 Обрабатываем очередь: {queue_size} новостей")
+                processed = await process_multiple_from_queue()
+                print(f"✅ Обработано {processed} новостей из очереди")
+            else:
+                print("📭 Очередь пуста")
+
+            # Пауза перед следующим циклом
+            print("⏳ Следующая проверка через 30 секунд...")
+            await asyncio.sleep(30)
+
+        except Exception as e:
+            print(f"❌ Ошибка в планировщике: {e}")
+            print("⏳ Повторная попытка через 60 секунд...")
+            await asyncio.sleep(60)
+
