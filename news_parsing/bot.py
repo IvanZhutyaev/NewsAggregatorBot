@@ -348,22 +348,66 @@ async def cmd_add_site(message: types.Message):
 
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
-        await message.answer("❌ Укажи ссылку на RSS\nНапример: `/addsite https://example.com/rss`",
-                             parse_mode="Markdown")
+        await message.answer(
+            "❌ Укажи ссылки на RSS (можно несколько через запятую или с новой строки)\n\n"
+            "Примеры:\n"
+            "• `/addsite https://example1.com/rss, https://example2.com/rss`\n"
+            "• `/addsite https://example1.com/rss`\n"
+            "    `https://example2.com/rss`\n"
+            "    `https://example3.com/rss`",
+            parse_mode="Markdown"
+        )
         return
 
-    url = args[1].strip()
+    urls_text = args[1].strip()
 
-    # Простая валидация URL
-    if not url.startswith(('http://', 'https://')):
-        await message.answer("❌ Неверный формат ссылки. Должна начинаться с http:// или https://")
+    # Разбиваем ссылки по разным разделителям
+    urls = []
+    for line in urls_text.split('\n'):
+        line = line.strip()
+        if not line:
+            continue
+        # Разбиваем по запятым в одной строке
+        for url in line.split(','):
+            url = url.strip()
+            if url:
+                urls.append(url)
+
+    if not urls:
+        await message.answer("❌ Не найдено валидных ссылок")
         return
 
-    try:
-        await add_site(url)
-        await message.answer(f"✅ RSS-лента добавлена:\n`{url}`", parse_mode="Markdown")
-    except Exception as e:
-        await message.answer(f"❌ Ошибка добавления: {e}")
+    added_urls = []
+    error_urls = []
+
+    for url in urls:
+        # Простая валидация URL
+        if not url.startswith(('http://', 'https://')):
+            error_urls.append(f"{url} (неверный формат)")
+            continue
+
+        try:
+            await add_site(url)
+            added_urls.append(url)
+        except Exception as e:
+            error_urls.append(f"{url} ({str(e)})")
+
+    # Формируем ответ
+    result_message = ""
+
+    if added_urls:
+        result_message += f"✅ Добавлено {len(added_urls)} RSS-лент:\n"
+        for url in added_urls:
+            result_message += f"• `{url}`\n"
+
+    if error_urls:
+        if result_message:
+            result_message += "\n"
+        result_message += f"❌ Ошибки ({len(error_urls)}):\n"
+        for error in error_urls:
+            result_message += f"• {error}\n"
+
+    await message.answer(result_message, parse_mode="Markdown")
 
 
 @dp.message(Command("listsites"))

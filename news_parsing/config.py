@@ -1,5 +1,5 @@
 BOT_TOKEN = ""
-CHANNEL_ID = 
+CHANNEL_ID = ""
 DEEPSEEK_KEY = ""
 ADMINS = [ ] #
 # === Настройки для публикации на сайт ===
