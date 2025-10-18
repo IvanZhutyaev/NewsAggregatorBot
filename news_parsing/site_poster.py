@@ -133,6 +133,10 @@ def translate_news_content(title: str, body: str) -> dict:
     """
     Возвращает контент только на русском языке (без перевода)
     """
+    # Убедимся, что body не пустой
+    if not body or len(body.strip()) == 0:
+        body = title  # Используем заголовок как тело если тело пустое
+
     # Создаем короткий подзаголовок из первых 200 символов тела текста
     short_subtitle = truncate_text(body, 200)
 
@@ -159,13 +163,16 @@ def translate_news_content(title: str, body: str) -> dict:
         }
     }
 
-    print("✅ Контент подготовлен только на русском языке (перевод отключен)")
+    print(f"✅ Контент подготовлен: заголовок {len(title)} симв., описание {len(body)} симв.")
     return translations
-
 
 def extract_title_and_body(text: str):
     """Разделяет текст на заголовок и тело"""
     text = text.strip()
+
+    # Если текст пустой, возвращаем заголовок как тело
+    if not text:
+        return "Новость", "Содержание новости"
 
     # Ищем разделитель - двойной перенос строки
     if "\n\n" in text:
@@ -179,15 +186,19 @@ def extract_title_and_body(text: str):
             title = lines[0].strip()
             body = "\n".join(lines[1:]).strip()
         else:
-            # Только одна строка
+            # Только одна строка - используем как заголовок, а тело делаем из заголовка
             title = text
-            body = ""
+            body = text  # Используем тот же текст как тело
 
-    # Ограничиваем длину
+    # Ограничиваем длину заголовка
     title = truncate_text(title, 255)
 
+    # Если тело пустое, используем заголовок
+    if not body:
+        body = title
+
     print(f"📄 Извлечен заголовок ({len(title)} символов): {title}")
-    print(f"📄 Извлечен текст: {len(body)} символов")
+    print(f"📄 Извлечен текст ({len(body)} символов): {body[:100]}...")
 
     return title, body
 
@@ -204,6 +215,11 @@ def create_news_api(title: str, description: str, subtitle: str, image_uri: str,
 
     try:
         print("📤 Создаем новость через API (только русский язык)...")
+
+        # Проверяем обязательные поля
+        if not translations['ru']['title'] or not translations['ru']['description']:
+            print("❌ Ошибка: заголовок или описание пустые")
+            return False
 
         # SEO настройки только на русском
         seo_keywords = truncate_text("агро, сельское хозяйство, АПК, новости сельского хозяйства", 255)
@@ -260,11 +276,23 @@ def create_news_api(title: str, description: str, subtitle: str, image_uri: str,
         print(f"📊 Отправляем данные (только русский язык):")
         print(f"   Заголовок: '{payload['title']}' ({len(payload['title'])} симв.)")
         print(f"   Подзаголовок: '{payload['subtitle']}' ({len(payload['subtitle'])} симв.)")
+        print(f"   Описание: '{payload['description'][:100]}...' ({len(payload['description'])} симв.)")
         print(f"   Image URI: '{payload['image_uri']}'")
+        print(f"   URL: {news_url}")
+        print(f"   Токен: {access_token[:20]}...")
 
         response = requests.post(news_url, json=payload, headers=headers, timeout=30)
 
         print(f"📡 Ответ сервера: {response.status_code}")
+        print(f"📡 Заголовки ответа: {dict(response.headers)}")
+
+        # Проверяем тип ответа
+        content_type = response.headers.get('content-type', '')
+        if 'application/json' in content_type:
+            response_data = response.json()
+            print(f"📡 JSON ответ: {response_data}")
+        else:
+            print(f"📡 Не-JSON ответ (первые 200 символов): {response.text[:200]}")
 
         if response.status_code == 201:
             result_data = response.json()
@@ -273,7 +301,6 @@ def create_news_api(title: str, description: str, subtitle: str, image_uri: str,
             return True
         else:
             print(f"❌ Ошибка создания новости: {response.status_code}")
-            print(f"Ответ сервера: {response.text}")
 
             if response.status_code == 401:
                 print("🔄 Токен устарел, пробуем переаутентифицироваться...")
@@ -288,6 +315,8 @@ def create_news_api(title: str, description: str, subtitle: str, image_uri: str,
 
     except Exception as e:
         print(f"❌ Ошибка при создании новости: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 
@@ -301,6 +330,11 @@ def post_news_to_site(news_text: str, image_path: str = None) -> bool:
 
     # Шаг 2: Извлечение заголовка и текста
     title, body = extract_title_and_body(news_text)
+
+    # ВРЕМЕННАЯ ПРОВЕРКА: если тело пустое, используем тестовый текст
+    if not body or len(body.strip()) == 0:
+        print("⚠️ Тело новости пустое, используем тестовый текст")
+        body = "Это тестовое описание новости. " + title
 
     # Шаг 3: Загрузка изображения
     image_uri = None
@@ -325,7 +359,6 @@ def post_news_to_site(news_text: str, image_path: str = None) -> bool:
         print("❌ Не удалось опубликовать новость на сайте")
 
     return success
-
 
 def post_news_to_site_simple(news_text: str, image_path: str = None) -> bool:
     """Простая версия публикации (только русский язык)"""
