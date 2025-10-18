@@ -1,8 +1,15 @@
+<<<<<<< HEAD
 BOT_TOKEN = "7860144131:AAEzwawng1BJjVJ-RtTwVcYBNzcPsxghF4g"
 CHANNEL_ID = -1002712994446
 DEEPSEEK_KEY = "sk-0c19f7b4a67943fa9c008063910b9e97"
 ADMINS = [535801213,5225476657]
+=======
+BOT_TOKEN = "123456789"
+CHANNEL_ID = "123456789"
+DEEPSEEK_KEY = "123456789"
+ADMINS = [123456789 ] #
+>>>>>>> 9239a84e33571fd7adb015905add8ff31e19e003
 # === Настройки для публикации на сайт ===
-SITE_LOGIN = "ajlin4277@gmail.com"
-SITE_PASSWORD = "Ab123456789"
-SITE_URL = "https://api.demo.agrosearch.kz"  # URL формы добавления новости
+SITE_LOGIN = "123456789@gmail.com"
+SITE_PASSWORD = "123456789"
+SITE_URL = "https://123456789"  # URL формы добавления новости
