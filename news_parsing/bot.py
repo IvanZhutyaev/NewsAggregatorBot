@@ -6,7 +6,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import FSInputFile
 from config import BOT_TOKEN, CHANNEL_ID, ADMINS
 from database import init_db, add_site, remove_site, get_sites, is_news_sent, mark_news_sent, mark_news_published, \
-    get_queue_size, clear_stuck_processing
+    get_queue_size, clear_stuck_processing, set_moderation_lock, is_moderation_locked
 from site_poster import post_news_to_site
 from news_sender import send_processed_news_to_admin, get_pending_raw_news, get_pending_processed_news, \
     remove_from_pending_raw_news, remove_from_pending_processed_news, delete_news_messages
@@ -21,115 +21,141 @@ def is_admin(user_id: int) -> bool:
 
 
 # Обработка одобрения сырой новости
+# В обработчике approve_raw_news
 @dp.callback_query(F.data.startswith("approve_raw|"))
 async def approve_raw_news(callback: types.CallbackQuery):
-    await callback.answer("✅ Новость одобрена для редактирования")
+    from database import set_moderation_lock
 
-    _, news_id = callback.data.split("|", 1)
-    data = get_pending_raw_news().get(news_id)
-    if not data:
+    # Блокируем модерацию
+    await set_moderation_lock(True)
+
+    try:
+        await callback.answer("✅ Новость одобрена для редактирования")
+
+        _, news_id = callback.data.split("|", 1)
+        data = get_pending_raw_news().get(news_id)
+        if not data:
+            await delete_news_messages(callback.from_user.id, news_id)
+            await callback.message.answer("❌ Новость не найдена.")
+            return
+
+        # Удаляем все сообщения этой новости у админа
         await delete_news_messages(callback.from_user.id, news_id)
-        await callback.message.answer("❌ Новость не найдена.")
-        return
 
-    # Удаляем все сообщения этой новости у админа
-    await delete_news_messages(callback.from_user.id, news_id)
+        # Обрабатываем через DeepSeek
+        from parser import process_with_deepseek
+        processed_text = await process_with_deepseek(data["title"], data["text"])
 
-    # Обрабатываем через DeepSeek
-    from parser import process_with_deepseek
-    processed_text = await process_with_deepseek(data["title"], data["text"])
+        # Отправляем обработанную новость на финальное одобрение БЕЗ ФОТО
+        await send_processed_news_to_admin(processed_text, data["url"], data["title"])
 
-    # Отправляем обработанную новость на финальное одобрение
-    await send_processed_news_to_admin(processed_text, data["url"], data["title"])
+        # Удаляем из временного хранилища
+        remove_from_pending_raw_news(news_id)
 
-    # Удаляем из временного хранилища
-    remove_from_pending_raw_news(news_id)
+        # Уведомляем админа
+        await callback.message.answer("✅ Новость отправлена на обработку DeepSeek")
 
-    # Уведомляем админа
-    await callback.message.answer("✅ Новость отправлена на обработку DeepSeek")
+    finally:
+        # Разблокируем модерацию после завершения
+        await set_moderation_lock(False)
 
 
 # Обработка отклонения сырой новости
 @dp.callback_query(F.data.startswith("reject_raw|"))
 async def reject_raw_news(callback: types.CallbackQuery):
+    from database import set_moderation_lock
+
     try:
         await callback.answer("❌ Новость отклонена")
     except Exception:
         pass
 
-    _, news_id = callback.data.split("|", 1)
+    try:
+        _, news_id = callback.data.split("|", 1)
 
-    # Удаляем все сообщения этой новости у админа
-    await delete_news_messages(callback.from_user.id, news_id)
+        # Удаляем все сообщения этой новости у админа
+        await delete_news_messages(callback.from_user.id, news_id)
 
-    remove_from_pending_raw_news(news_id)
+        remove_from_pending_raw_news(news_id)
 
-    # Уведомляем ВСЕХ админов об отклонении
-    for admin_id in ADMINS:
-        try:
-            await bot.send_message(admin_id, "❌ Сырая новость отклонена.")
-        except Exception:
-            pass
+        # Уведомляем ВСЕХ админов об отклонении
+        for admin_id in ADMINS:
+            try:
+                await bot.send_message(admin_id, "❌ Сырая новость отклонена.")
+            except Exception:
+                pass
+    finally:
+        # Разблокируем модерацию
+        await set_moderation_lock(False)
 
 
 # Подтверждение обработанной новости для Telegram
 @dp.callback_query(F.data.startswith("approve|"))
 async def approve_processed_news(callback: types.CallbackQuery):
+    from database import set_moderation_lock
+
     await callback.answer()
 
-    _, news_id = callback.data.split("|", 1)
-    data = get_pending_processed_news().get(news_id)
-    if not data:
-        await delete_news_messages(callback.from_user.id, news_id)
-        await callback.message.answer("❌ Новость не найдена.")
-        return
-
-    news_text = data["text"]
-    image_path = data["image"]
-
-    if not os.path.exists(image_path):
-        print(f"❌ Файл не найден: {image_path}")
-        await delete_news_messages(callback.from_user.id, news_id)
-        await callback.message.answer("❌ Изображение не найдено, новость не отправлена.")
-        return
-
-    photo = FSInputFile(image_path)
-
     try:
-        # Сначала отправляем фото с началом текста (если текст короткий)
-        if len(news_text) <= 1024:
-            # Если текст помещается в подпись к фото
-            await bot.send_photo(CHANNEL_ID, photo, caption=news_text, parse_mode="HTML")
-        else:
-            # Если текст длинный - отправляем фото без текста, а текст отдельно
-            await bot.send_photo(CHANNEL_ID, photo)
-            # Отправляем текст частями
-            from news_sender import send_long_message
-            await send_long_message(CHANNEL_ID, news_text, "")
+        _, news_id = callback.data.split("|", 1)
+        data = get_pending_processed_news().get(news_id)
+        if not data:
+            await delete_news_messages(callback.from_user.id, news_id)
+            await callback.message.answer("❌ Новость не найдена.")
+            return
 
-    except Exception as e:
-        print("❌ Ошибка отправки в канал:", e)
-        await delete_news_messages(callback.from_user.id, news_id)
-        await callback.message.answer("❌ Не удалось отправить новость в канал.")
-        return
+        news_text = data["text"]
+        image_path = data["image"]
 
-    # Отмечаем как опубликованную
-    await mark_news_published(data["url"])
-    remove_from_pending_processed_news(news_id)
+        if not os.path.exists(image_path):
+            print(f"❌ Файл не найден: {image_path}")
+            await delete_news_messages(callback.from_user.id, news_id)
+            await callback.message.answer("❌ Изображение не найдено, новость не отправлена.")
+            return
 
-    # Удаляем все сообщения этой новости у админа
-    await delete_news_messages(callback.from_user.id, news_id)
+        photo = FSInputFile(image_path)
 
-    # Уведомляем ВСЕХ админов о публикации
-    for admin_id in ADMINS:
         try:
-            await bot.send_message(admin_id, "✅ Новость опубликована в Telegram.")
-        except Exception:
-            pass
+            # Сначала отправляем фото с началом текста (если текст короткий)
+            if len(news_text) <= 1024:
+                # Если текст помещается в подпись к фото
+                await bot.send_photo(CHANNEL_ID, photo, caption=news_text, parse_mode="HTML")
+            else:
+                # Если текст длинный - отправляем фото без текста, а текст отдельно
+                await bot.send_photo(CHANNEL_ID, photo)
+                # Отправляем текст частями
+                from news_sender import send_long_message
+                await send_long_message(CHANNEL_ID, news_text, "")
+
+        except Exception as e:
+            print("❌ Ошибка отправки в канал:", e)
+            await delete_news_messages(callback.from_user.id, news_id)
+            await callback.message.answer("❌ Не удалось отправить новость в канал.")
+            return
+
+        # Отмечаем как опубликованную
+        await mark_news_published(data["url"])
+        remove_from_pending_processed_news(news_id)
+
+        # Удаляем все сообщения этой новости у админа
+        await delete_news_messages(callback.from_user.id, news_id)
+
+        # Уведомляем ВСЕХ админов о публикации
+        for admin_id in ADMINS:
+            try:
+                await bot.send_message(admin_id, "✅ Новость опубликована в Telegram.")
+            except Exception:
+                pass
+
+    finally:
+        # Разблокируем модерацию
+        await set_moderation_lock(False)
 
 
 @dp.callback_query(F.data.startswith("site|"))
 async def post_to_site(callback: types.CallbackQuery):
+    from database import set_moderation_lock
+
     try:
         await callback.answer()
         _, news_id = callback.data.split("|", 1)
@@ -158,10 +184,15 @@ async def post_to_site(callback: types.CallbackQuery):
         print(f"❌ Ошибка в post_to_site: {e}")
         await delete_news_messages(callback.from_user.id, news_id)
         await callback.message.answer("❌ Произошла ошибка при публикации на сайте.")
+    finally:
+        # Разблокируем модерацию
+        await set_moderation_lock(False)
 
 
 @dp.callback_query(F.data.startswith("both|"))
 async def post_to_both(callback: types.CallbackQuery):
+    from database import set_moderation_lock
+
     try:
         await callback.answer()
         _, news_id = callback.data.split("|", 1)
@@ -218,27 +249,37 @@ async def post_to_both(callback: types.CallbackQuery):
         print(f"❌ Ошибка в post_to_both: {e}")
         await delete_news_messages(callback.from_user.id, news_id)
         await callback.message.answer("❌ Произошла ошибка при публикации.")
+    finally:
+        # Разблокируем модерацию
+        await set_moderation_lock(False)
 
 
 @dp.callback_query(F.data.startswith("reject|"))
 async def reject_processed_news(callback: types.CallbackQuery):
+    from database import set_moderation_lock
+
     try:
         await callback.answer("❌ Новость отклонена")
     except Exception:
         pass
 
-    _, news_id = callback.data.split("|", 1)
+    try:
+        _, news_id = callback.data.split("|", 1)
 
-    # Удаляем все сообщения этой новости у админа
-    await delete_news_messages(callback.from_user.id, news_id)
+        # Удаляем все сообщения этой новости у админа
+        await delete_news_messages(callback.from_user.id, news_id)
 
-    remove_from_pending_processed_news(news_id)
+        remove_from_pending_processed_news(news_id)
 
-    for admin_id in ADMINS:
-        try:
-            await bot.send_message(admin_id, "❌ Обработанная новость отклонена.")
-        except Exception:
-            pass
+        for admin_id in ADMINS:
+            try:
+                await bot.send_message(admin_id, "❌ Обработанная новость отклонена.")
+            except Exception:
+                pass
+    finally:
+        # Разблокируем модерацию
+        await set_moderation_lock(False)
+
 
 async def delete_message_safe(callback: types.CallbackQuery):
     """Безопасно удаляет сообщение, обрабатывая возможные ошибки"""
@@ -255,6 +296,7 @@ async def delete_message_safe(callback: types.CallbackQuery):
             )
         except Exception:
             pass
+
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
@@ -573,12 +615,14 @@ async def cmd_queue_status(message: types.Message):
     from news_sender import get_pending_raw_news, get_pending_processed_news
     pending_raw_count = len(get_pending_raw_news())
     pending_processed_count = len(get_pending_processed_news())
+    is_locked = await is_moderation_locked()
 
     status_text = (
         f"📊 *Статус системы*\n\n"
         f"• 📥 Новостей в очереди: *{queue_size}*\n"
         f"• ⏳ Сырых новостей на модерации: *{pending_raw_count}*\n"
         f"• ✍️ Обработанных новостей на модерации: *{pending_processed_count}*\n"
+        f"• 🔒 Модерация заблокирована: *{'Да' if is_locked else 'Нет'}*\n"
         f"• 👥 Всего админов: *{len(ADMINS)}*\n"
         f"\n*Процесс модерации:*\n"
         f"1. Сырая новость → Одобрение → DeepSeek\n"
@@ -601,6 +645,11 @@ async def cmd_post_next(message: types.Message):
         await message.answer("❌ Ты не админ!")
         return
 
+    # Проверяем блокировку модерации
+    if await is_moderation_locked():
+        await message.answer("⏳ Модерация заблокирована - дождитесь завершения текущей новости")
+        return
+
     # Запускаем обработку следующей новости из очереди
     from parser import process_next_from_queue
     success = await process_next_from_queue()
@@ -619,6 +668,8 @@ async def cmd_skip_next(message: types.Message):
 
     # Пропускаем текущую новость (очищаем зависшие обработки)
     await clear_stuck_processing()
+    # Также снимаем блокировку модерации
+    await set_moderation_lock(False)
     await message.answer("✅ Зависшие обработки очищены. Следующая новость будет обработана автоматически.")
 
 
@@ -669,6 +720,7 @@ async def cmd_force_check(message: types.Message):
         await asyncio.sleep(1)
 
     await message.answer(f"✅ Добавлено {total_added} новостей в очередь")
+
 
 # Обработчик для любых других сообщений
 @dp.message()

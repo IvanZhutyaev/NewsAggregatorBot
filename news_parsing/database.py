@@ -35,8 +35,15 @@ async def init_db():
                     processed_by INTEGER DEFAULT NULL
                 )
                 """)
+        await db.execute("""
+                CREATE TABLE IF NOT EXISTS moderation_lock (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    is_locked BOOLEAN DEFAULT FALSE,
+                    locked_until DATETIME DEFAULT NULL
+                )
+                """)
+        await db.execute("INSERT OR IGNORE INTO moderation_lock (id, is_locked) VALUES (1, FALSE)")
         await db.commit()
-
 async def add_site(url):
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("INSERT OR IGNORE INTO sites(url) VALUES(?)", (url,))
@@ -189,3 +196,15 @@ async def mark_approval_processed(link: str):
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("DELETE FROM approval_queue WHERE link = ?", (link,))
         await db.commit()
+async def set_moderation_lock(locked: bool):
+    """Устанавливает блокировку модерации"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("UPDATE moderation_lock SET is_locked = ? WHERE id = 1", (locked,))
+        await db.commit()
+
+async def is_moderation_locked() -> bool:
+    """Проверяет, заблокирована ли модерация"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        cursor = await db.execute("SELECT is_locked FROM moderation_lock WHERE id = 1")
+        result = await cursor.fetchone()
+        return result[0] if result else False

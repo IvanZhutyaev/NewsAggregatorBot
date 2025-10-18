@@ -18,7 +18,12 @@ def get_full_article(url: str) -> str:
 
         # Добавляем заголовки чтобы избежать блокировки
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'ru-RU,ru;q=0.8,en-US;q=0.5,en;q=0.3',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
         }
 
         response = requests.get(url, timeout=4, headers=headers)
@@ -260,7 +265,8 @@ async def parse_feed_and_process(url: str, limit: int = 20) -> int:
     for entry in feed.entries[:limit]:
         link = getattr(entry, 'link', '')
 
-        if not await is_news_published(link):
+        # Проверяем, не была ли уже опубликована или отправлена на модерацию
+        if not await is_news_published(link) and not await is_news_sent(link):
             print(f"📥 Добавляем новость в очередь: {getattr(entry, 'title', 'Без названия')}")
 
             # Получаем ОРИГИНАЛЬНЫЙ текст (без DeepSeek обработки)
@@ -295,24 +301,22 @@ async def parse_feed_and_process(url: str, limit: int = 20) -> int:
 
     return added_to_queue
 
-
 async def process_multiple_from_queue():
-    """Обрабатывает несколько новостей одновременно"""
+    """Обрабатывает новости из очереди с учетом блокировки модерации"""
+    from database import is_moderation_locked
+
+    # Проверяем, не заблокирована ли модерация
+    if await is_moderation_locked():
+        print("⏳ Модерация заблокирована - ждем завершения текущей новости")
+        return 0
+
     queue_size = await get_queue_size()
     if queue_size == 0:
         return 0
 
-    # Обрабатываем до 3 новостей одновременно
-    process_count = min(3, queue_size)
-    tasks = []
-
-    for _ in range(process_count):
-        task = asyncio.create_task(process_next_from_queue())
-        tasks.append(task)
-
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    return sum(1 for r in results if r is True)
-
+    # Берем только одну новость вместо нескольких
+    success = await process_next_from_queue()
+    return 1 if success else 0
 # Проверка новостей и отправка админу
 async def check_news_and_send():
     sites = await get_sites()
@@ -334,8 +338,14 @@ async def process_next_from_queue():
         print(f"🎯 Обрабатываем новость из очереди: {title}")
         print(f"🔗 Ссылка: {link}")
 
-        # Отправляем СЫРУЮ (оригинальную) новость на первичное одобрение
-        await send_raw_news_to_admin(title, news_text, link)  # news_text - оригинальный
+        # Проверяем, не была ли уже отправлена на модерацию
+        if await is_news_sent(link):
+            print(f"⚠️ Новость уже отправлена на модерацию, пропускаем: {link}")
+            await mark_queue_processed(link)
+            return False
+
+        # Отправляем СЫРУЮ (оригинальную) новость на первичное одобрение БЕЗ ФОТО
+        await send_raw_news_to_admin(title, news_text, link)
 
         # Помечаем как отправленную на модерацию
         await mark_news_sent(link)
@@ -351,22 +361,21 @@ async def process_next_from_queue():
         if 'queue_item' in locals() and queue_item:
             await mark_queue_processed(queue_item[1])
         return False
-
 async def process_with_deepseek(title: str, body: str) -> str:
     """Обработка текста через DeepSeek после одобрения сырой новости"""
     return paraphrase_with_deepseek(title, body)
 # Фоновая проверка
 async def scheduler():
-    """Улучшенный планировщик с независимой работой"""
+    """Улучшенный планировщик с блокировкой модерации"""
     print("🔄 Планировщик парсера запущен!")
 
     while True:
         try:
-            # Всегда сначала проверяем новые новости
+            # Проверяем новые новости
             sites = await get_sites()
             if not sites:
                 print("⚠️ Нет RSS-лент для проверки. Используйте /addsite")
-                await asyncio.sleep(60)  # Ждем минуту если нет сайтов
+                await asyncio.sleep(60)
                 continue
 
             print(f"🔍 Проверяем {len(sites)} RSS-лент...")
@@ -377,7 +386,7 @@ async def scheduler():
                     added = await parse_feed_and_process(url, limit=15)
                     total_added += added
                     print(f"✅ Добавлено {added} новостей из {url}")
-                    await asyncio.sleep(1)  # Пауза между сайтами
+                    await asyncio.sleep(1)
                 except Exception as e:
                     print(f"❌ Ошибка парсинга {url}: {e}")
 
@@ -386,14 +395,18 @@ async def scheduler():
             else:
                 print("ℹ️ Новых новостей не найдено")
 
-            # Обрабатываем очередь
-            queue_size = await get_queue_size()
-            if queue_size > 0:
-                print(f"📥 Обрабатываем очередь: {queue_size} новостей")
-                processed = await process_multiple_from_queue()
-                print(f"✅ Обработано {processed} новостей из очереди")
+            # Обрабатываем очередь ТОЛЬКО если модерация не заблокирована
+            from database import is_moderation_locked
+            if not await is_moderation_locked():
+                queue_size = await get_queue_size()
+                if queue_size > 0:
+                    print(f"📥 Обрабатываем очередь: {queue_size} новостей")
+                    processed = await process_multiple_from_queue()
+                    print(f"✅ Обработано {processed} новостей из очереди")
+                else:
+                    print("📭 Очередь пуста")
             else:
-                print("📭 Очередь пуста")
+                print("⏳ Модерация заблокирована - пропускаем обработку очереди")
 
             # Пауза перед следующим циклом
             print("⏳ Следующая проверка через 30 секунд...")
